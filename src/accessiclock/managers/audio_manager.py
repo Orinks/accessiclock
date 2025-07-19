@@ -12,7 +12,6 @@ from pathlib import Path
 from ..utils.logging_config import get_logger
 from ..utils.error_handler import get_error_handler, ErrorCategory
 from ..interfaces.audio_interface import AudioBackend, AudioType
-from ..backends import PygameAudioBackend
 
 
 class AudioManager:
@@ -36,6 +35,8 @@ class AudioManager:
         
         # Use provided backend or default to pygame backend
         if audio_backend is None:
+            # Lazy import to avoid pygame import at module level
+            from ..backends import PygameAudioBackend
             audio_backend = PygameAudioBackend(error_handler)
         
         self.audio_backend = audio_backend
@@ -163,12 +164,7 @@ class AudioManager:
         
         try:
             with self._lock:
-                success = self.audio_backend.stop_sound(audio_type)
-                
-                if success:
-                    self.logger.debug(f"Stopped sound: {audio_type.value}")
-                
-                return success
+                return self._stop_sound_unlocked(audio_type)
                 
         except Exception as e:
             self.error_handler.handle_error(
@@ -179,6 +175,23 @@ class AudioManager:
             )
             return False
     
+    def _stop_sound_unlocked(self, audio_type: AudioType) -> bool:
+        """
+        Stop playing a specific type of sound without acquiring lock.
+        
+        Args:
+            audio_type: The type of audio to stop
+            
+        Returns:
+            bool: True if stopped successfully, False otherwise
+        """
+        success = self.audio_backend.stop_sound(audio_type)
+        
+        if success:
+            self.logger.debug(f"Stopped sound: {audio_type.value}")
+        
+        return success
+    
     def stop_all_sounds(self) -> None:
         """Stop all currently playing sounds."""
         if not self._initialized:
@@ -187,7 +200,7 @@ class AudioManager:
         try:
             with self._lock:
                 for audio_type in AudioType:
-                    self.stop_sound(audio_type)
+                    self._stop_sound_unlocked(audio_type)
                 self.logger.debug("Stopped all sounds")
                 
         except Exception as e:
