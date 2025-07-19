@@ -3,6 +3,11 @@
 ## Virtual Environment Management
 Always activate the virtual environment before running any commands:
 
+**Windows (bash/Git Bash):**
+```bash
+source .venv/Scripts/activate
+```
+
 **Windows (cmd):**
 ```cmd
 .venv\Scripts\activate
@@ -27,8 +32,8 @@ source .venv/bin/activate
 
 ### Test Execution Methods
 ```bash
-# Activate environment first
-.venv\Scripts\activate
+# Activate environment first (Windows bash)
+source .venv/Scripts/activate
 
 # Method 1: Full test suite via Briefcase (preferred for integration testing)
 briefcase dev --test
@@ -43,13 +48,20 @@ python tests/accessiclock.py
 ### Toga Testing Backend
 When running tests, use the Toga dummy backend to avoid GUI dependencies:
 ```bash
-# Set environment variable for headless testing
-set TOGA_BACKEND=dummy  # Windows cmd
-$env:TOGA_BACKEND="dummy"  # Windows PowerShell
-export TOGA_BACKEND=dummy  # Unix/Linux/macOS
+# Set environment variable for headless testing (Windows bash)
+export TOGA_BACKEND=dummy
 
 # Then run tests
 briefcase dev --test
+```
+
+### Windows-Specific Testing Commands
+```bash
+# For Windows with bash/Git Bash environment
+source .venv/Scripts/activate && export TOGA_BACKEND=dummy && pytest tests/ -vv
+
+# For running specific test files
+source .venv/Scripts/activate && export TOGA_BACKEND=dummy && pytest tests/test_audio_manager.py -v
 ```
 
 ## Test-Driven Development (TDD) Approach
@@ -70,14 +82,14 @@ When implementing new features:
 
 ### Example TDD Workflow for AccessiClock
 ```bash
-# 1. Activate environment
-.venv\Scripts\activate
+# 1. Activate environment (Windows bash)
+source .venv/Scripts/activate
 
 # 2. Write test for new clock feature
 # Edit tests/test_clock_display.py
 
 # 3. Run tests to see failure
-set TOGA_BACKEND=dummy
+export TOGA_BACKEND=dummy
 briefcase dev --test
 
 # 4. Implement minimal feature

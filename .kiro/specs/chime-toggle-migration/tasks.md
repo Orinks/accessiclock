@@ -29,8 +29,15 @@
     - Write unit tests for preferences loading, saving, and validation
     - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
 
-- [ ] 3. Build audio system foundation
-  - [ ] 3.1 Implement basic audio manager with pygame.mixer
+- [x] 3. Build audio system foundation
+
+
+
+
+  - [x] 3.1 Implement basic audio manager with pygame.mixer
+
+
+
     - Create AudioManager class using pygame.mixer for simultaneous audio playback
     - Implement individual channel management for ticks, chimes, and other sounds
     - Add volume control for different audio types using pygame mixer channels
@@ -38,7 +45,9 @@
     - Write unit tests for audio loading, channel management, and volume control
     - _Requirements: 13.2, 13.6, 10.3, 10.6_
 
-  - [ ] 3.2 Add chime scheduling and playback
+  - [x] 3.2 Add chime scheduling and playback
+
+
     - Implement chime timing logic for hourly, quarter-hour intervals
     - Add support for simultaneous ticking and chime playback using pygame mixer channels
     - Create chime enable/disable functionality with proper channel management
