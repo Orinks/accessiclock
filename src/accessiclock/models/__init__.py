@@ -1,6 +1,30 @@
 """
-Data models for AccessiClock application.
+Models package for AccessiClock application.
 
-This package contains all the data model classes and configuration structures
+This package contains all data models, dataclasses, and data structures
 used throughout the application.
 """
+
+from .data_models import (
+    ClockPackage,
+    VisualConfig,
+    AudioConfig,
+    UserPreferences,
+    NotificationSettings,
+    AnalogStyle,
+    DigitalStyle,
+    ClockType,
+    ValidationError
+)
+
+__all__ = [
+    'ClockPackage',
+    'VisualConfig', 
+    'AudioConfig',
+    'UserPreferences',
+    'NotificationSettings',
+    'AnalogStyle',
+    'DigitalStyle',
+    'ClockType',
+    'ValidationError'
+]
