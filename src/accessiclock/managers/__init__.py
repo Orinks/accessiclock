@@ -6,7 +6,8 @@ of the application functionality.
 """
 
 from .preferences_manager import PreferencesManager
-from .audio_manager import AudioManager, AudioType
+from .audio_manager import AudioManager
 from .chime_scheduler import ChimeScheduler, ChimeInterval
+from ..interfaces.audio_interface import AudioType
 
 __all__ = ['PreferencesManager', 'AudioManager', 'AudioType', 'ChimeScheduler', 'ChimeInterval']

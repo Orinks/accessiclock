@@ -2,212 +2,54 @@
 Audio Manager for AccessiClock application.
 
 This module provides the AudioManager class that handles all audio playback
-including ticks, chimes, and other sounds using pygame.mixer for simultaneous
-audio playback with individual channel management.
+using an AudioBackend interface for better testability and separation of concerns.
 """
 
-from pathlib import Path
-from typing import Dict, Optional, Union, List
-from enum import Enum
 import threading
-import time
+from typing import Dict, Optional, Union, List
+from pathlib import Path
 
 from ..utils.logging_config import get_logger
 from ..utils.error_handler import get_error_handler, ErrorCategory
-
-# Import pygame only when needed to avoid test hanging issues
-try:
-    import pygame
-    import pygame.mixer
-    PYGAME_AVAILABLE = True
-except ImportError:
-    PYGAME_AVAILABLE = False
-    # Create mock pygame for testing
-    class MockPygame:
-        class error(Exception):
-            pass
-        
-        class mixer:
-            @staticmethod
-            def pre_init(*args, **kwargs):
-                pass
-            
-            @staticmethod
-            def init():
-                pass
-            
-            @staticmethod
-            def get_init():
-                return True
-            
-            @staticmethod
-            def set_num_channels(num):
-                pass
-            
-            @staticmethod
-            def quit():
-                pass
-            
-            class Sound:
-                def __init__(self, file_path):
-                    pass
-                
-                def set_volume(self, volume):
-                    pass
-            
-            class Channel:
-                def __init__(self, channel_num):
-                    self.channel_num = channel_num
-                
-                def get_busy(self):
-                    return False
-                
-                def play(self, sound, loops=0):
-                    pass
-                
-                def stop(self):
-                    pass
-        
-        error = Exception
-    
-    pygame = MockPygame()
-
-
-class AudioType(Enum):
-    """Enumeration for different audio types."""
-    TICK = "tick"
-    HOUR_CHIME = "hour_chime"
-    QUARTER_CHIME = "quarter_chime"
-    HALF_CHIME = "half_chime"
-    SPEECH = "speech"
+from ..interfaces.audio_interface import AudioBackend, AudioType
+from ..backends import PygameAudioBackend
 
 
 class AudioManager:
     """
     Manages all audio playback for the AccessiClock application.
     
-    Uses pygame.mixer for simultaneous audio playback with individual channel
-    management for different audio types (ticks, chimes, speech).
+    Uses an AudioBackend interface for audio operations, allowing for
+    easy testing and potential backend swapping.
     """
     
-    # Audio channel assignments
-    CHANNEL_ASSIGNMENTS = {
-        AudioType.TICK: 0,
-        AudioType.HOUR_CHIME: 1,
-        AudioType.QUARTER_CHIME: 2,
-        AudioType.HALF_CHIME: 3,
-        AudioType.SPEECH: 4
-    }
-    
-    # Supported audio formats
-    SUPPORTED_FORMATS = ['.wav', '.ogg', '.mp3']
-    
-    def __init__(self, error_handler=None):
+    def __init__(self, audio_backend: Optional[AudioBackend] = None, error_handler=None):
         """
         Initialize the AudioManager.
         
         Args:
+            audio_backend: AudioBackend implementation to use (defaults to PygameAudioBackend)
             error_handler: Optional error handler instance
         """
         self.logger = get_logger("audio_manager")
         self.error_handler = error_handler or get_error_handler()
         
-        # Audio state
-        self._initialized = False
-        self._sound_files: Dict[AudioType, Optional[pygame.mixer.Sound]] = {}
-        self._volume_settings: Dict[AudioType, float] = {
-            AudioType.TICK: 0.8,
-            AudioType.HOUR_CHIME: 1.0,
-            AudioType.QUARTER_CHIME: 1.0,
-            AudioType.HALF_CHIME: 1.0,
-            AudioType.SPEECH: 0.9
-        }
-        self._master_volume: float = 1.0
-        self._channels: Dict[AudioType, pygame.mixer.Channel] = {}
+        # Use provided backend or default to pygame backend
+        if audio_backend is None:
+            audio_backend = PygameAudioBackend(error_handler)
+        
+        self.audio_backend = audio_backend
         
         # Thread safety
         self._lock = threading.Lock()
         
-        # Initialize pygame mixer
-        self._initialize_mixer()
-    
-    def _initialize_mixer(self) -> None:
-        """Initialize pygame mixer with appropriate settings."""
-        try:
-            # Check if pygame is available
-            if not PYGAME_AVAILABLE:
-                self.logger.info("Pygame not available, using mock audio manager")
-                self._initialized = True
-                # Create mock channels
-                for audio_type, channel_num in self.CHANNEL_ASSIGNMENTS.items():
-                    self._channels[audio_type] = pygame.mixer.Channel(channel_num)
-                return
-            
-            # Initialize pygame mixer if not already initialized
-            if not pygame.mixer.get_init():
-                # Initialize with high quality settings
-                pygame.mixer.pre_init(
-                    frequency=44100,  # High quality sample rate
-                    size=-16,         # 16-bit signed samples
-                    channels=2,       # Stereo
-                    buffer=1024       # Small buffer for low latency
-                )
-                pygame.mixer.init()
-            
-            # Reserve channels for our audio types
-            num_channels = len(self.CHANNEL_ASSIGNMENTS)
-            pygame.mixer.set_num_channels(max(num_channels, 8))  # Ensure we have enough channels
-            
-            # Get channel objects
-            for audio_type, channel_num in self.CHANNEL_ASSIGNMENTS.items():
-                try:
-                    self._channels[audio_type] = pygame.mixer.Channel(channel_num)
-                except (pygame.error, AttributeError):
-                    # Create a mock channel for testing or when pygame is not available
-                    self._channels[audio_type] = None
-            
-            self._initialized = True
-            self.logger.info("Audio mixer initialized successfully")
-            
-        except pygame.error as e:
-            self.logger.warning(f"Pygame mixer initialization failed: {e}")
-            # In test environments or when audio is not available, continue with limited functionality
-            self._initialized = True  # Allow tests to continue
-            # Create mock channels for testing
-            for audio_type, channel_num in self.CHANNEL_ASSIGNMENTS.items():
-                # Create a simple mock channel that doesn't require pygame initialization
-                mock_channel = type('MockChannel', (), {
-                    'get_busy': lambda: False,
-                    'play': lambda sound, loops=0: None,
-                    'stop': lambda: None
-                })()
-                self._channels[audio_type] = mock_channel
-            if self.error_handler:
-                self.error_handler.handle_error(
-                    e,
-                    ErrorCategory.AUDIO,
-                    "mixer initialization",
-                    show_user_notification=False
-                )
-        except Exception as e:
-            self.logger.warning(f"Audio manager initialization failed: {e}")
-            self._initialized = True  # Allow tests to continue
-            # Create mock channels for testing
-            for audio_type, channel_num in self.CHANNEL_ASSIGNMENTS.items():
-                # Create a simple mock channel that doesn't require pygame initialization
-                mock_channel = type('MockChannel', (), {
-                    'get_busy': lambda: False,
-                    'play': lambda sound, loops=0: None,
-                    'stop': lambda: None
-                })()
-                self._channels[audio_type] = mock_channel
-            if self.error_handler:
-                self.error_handler.handle_error(
-                    e,
-                    ErrorCategory.AUDIO,
-                    "mixer initialization",
-                    show_user_notification=False
-                )
+        # Initialize the backend
+        self._initialized = self.audio_backend.initialize()
+        
+        if self._initialized:
+            self.logger.info("AudioManager initialized successfully")
+        else:
+            self.logger.warning("AudioManager initialization failed")
     
     def load_sound_file(self, audio_type: AudioType, file_path: Union[str, Path]) -> bool:
         """
@@ -225,38 +67,16 @@ class AudioManager:
             return False
         
         try:
-            file_path = Path(file_path)
-            
-            # Validate file exists
-            if not file_path.exists():
-                raise FileNotFoundError(f"Audio file not found: {file_path}")
-            
-            # Validate file format
-            if not self._is_supported_format(file_path):
-                raise ValueError(f"Unsupported audio format: {file_path.suffix}")
-            
             with self._lock:
-                # Load the sound
-                sound = pygame.mixer.Sound(str(file_path))
+                success = self.audio_backend.load_sound_file(audio_type, file_path)
                 
-                # Set initial volume
-                volume = self._volume_settings.get(audio_type, 1.0) * self._master_volume
-                sound.set_volume(volume)
+                if success:
+                    self.logger.info(f"Loaded sound file for {audio_type.value}: {file_path}")
+                else:
+                    self.logger.warning(f"Failed to load sound file for {audio_type.value}: {file_path}")
                 
-                # Store the sound
-                self._sound_files[audio_type] = sound
+                return success
                 
-                self.logger.info(f"Loaded sound file for {audio_type.value}: {file_path}")
-                return True
-                
-        except (pygame.error, FileNotFoundError, ValueError) as e:
-            self.error_handler.handle_error(
-                e,
-                ErrorCategory.AUDIO,
-                f"loading sound file for {audio_type.value}",
-                show_user_notification=False
-            )
-            return False
         except Exception as e:
             self.error_handler.handle_error(
                 e,
@@ -310,36 +130,15 @@ class AudioManager:
         
         try:
             with self._lock:
-                # Check if sound is loaded
-                sound = self._sound_files.get(audio_type)
-                if sound is None:
-                    self.logger.warning(f"No sound loaded for {audio_type.value}")
-                    return False
+                success = self.audio_backend.play_sound(audio_type, loops)
                 
-                # Get the channel for this audio type
-                channel = self._channels.get(audio_type)
-                if channel is None:
-                    self.logger.error(f"No channel assigned for {audio_type.value}")
-                    return False
+                if success:
+                    self.logger.debug(f"Playing sound: {audio_type.value}")
+                else:
+                    self.logger.warning(f"Failed to play sound: {audio_type.value}")
                 
-                # Stop any currently playing sound on this channel
-                if channel.get_busy():
-                    channel.stop()
+                return success
                 
-                # Play the sound
-                channel.play(sound, loops=loops)
-                
-                self.logger.debug(f"Playing sound: {audio_type.value}")
-                return True
-                
-        except pygame.error as e:
-            self.error_handler.handle_error(
-                e,
-                ErrorCategory.AUDIO,
-                f"playing {audio_type.value} sound",
-                show_user_notification=False
-            )
-            return False
         except Exception as e:
             self.error_handler.handle_error(
                 e,
@@ -364,20 +163,13 @@ class AudioManager:
         
         try:
             with self._lock:
-                channel = self._channels.get(audio_type)
-                if channel and channel.get_busy():
-                    channel.stop()
-                    self.logger.debug(f"Stopped sound: {audio_type.value}")
-                return True
+                success = self.audio_backend.stop_sound(audio_type)
                 
-        except pygame.error as e:
-            self.error_handler.handle_error(
-                e,
-                ErrorCategory.AUDIO,
-                f"stopping {audio_type.value} sound",
-                show_user_notification=False
-            )
-            return False
+                if success:
+                    self.logger.debug(f"Stopped sound: {audio_type.value}")
+                
+                return success
+                
         except Exception as e:
             self.error_handler.handle_error(
                 e,
@@ -423,17 +215,12 @@ class AudioManager:
         
         try:
             with self._lock:
-                # Update volume setting
-                self._volume_settings[audio_type] = volume
+                success = self.audio_backend.set_volume(audio_type, volume)
                 
-                # Apply to loaded sound if available
-                sound = self._sound_files.get(audio_type)
-                if sound:
-                    effective_volume = volume * self._master_volume
-                    sound.set_volume(effective_volume)
+                if success:
+                    self.logger.debug(f"Set volume for {audio_type.value}: {volume}")
                 
-                self.logger.debug(f"Set volume for {audio_type.value}: {volume}")
-                return True
+                return success
                 
         except Exception as e:
             self.error_handler.handle_error(
@@ -460,17 +247,12 @@ class AudioManager:
         
         try:
             with self._lock:
-                self._master_volume = volume
+                success = self.audio_backend.set_master_volume(volume)
                 
-                # Update all loaded sounds with new master volume
-                for audio_type, sound in self._sound_files.items():
-                    if sound:
-                        type_volume = self._volume_settings.get(audio_type, 1.0)
-                        effective_volume = type_volume * self._master_volume
-                        sound.set_volume(effective_volume)
+                if success:
+                    self.logger.debug(f"Set master volume: {volume}")
                 
-                self.logger.debug(f"Set master volume: {volume}")
-                return True
+                return success
                 
         except Exception as e:
             self.error_handler.handle_error(
@@ -491,7 +273,7 @@ class AudioManager:
         Returns:
             float: Current volume level (0.0 to 1.0)
         """
-        return self._volume_settings.get(audio_type, 1.0)
+        return self.audio_backend.get_volume(audio_type)
     
     def get_master_volume(self) -> float:
         """
@@ -500,7 +282,7 @@ class AudioManager:
         Returns:
             float: Current master volume level (0.0 to 1.0)
         """
-        return self._master_volume
+        return self.audio_backend.get_master_volume()
     
     def is_playing(self, audio_type: AudioType) -> bool:
         """
@@ -516,31 +298,9 @@ class AudioManager:
             return False
         
         try:
-            channel = self._channels.get(audio_type)
-            return channel.get_busy() if channel else False
+            return self.audio_backend.is_playing(audio_type)
         except Exception:
             return False
-    
-    def get_loaded_sounds(self) -> List[AudioType]:
-        """
-        Get a list of audio types that have sounds loaded.
-        
-        Returns:
-            List[AudioType]: List of audio types with loaded sounds
-        """
-        return [audio_type for audio_type, sound in self._sound_files.items() if sound is not None]
-    
-    def _is_supported_format(self, file_path: Path) -> bool:
-        """
-        Check if the audio file format is supported.
-        
-        Args:
-            file_path: Path to the audio file
-            
-        Returns:
-            bool: True if format is supported, False otherwise
-        """
-        return file_path.suffix.lower() in self.SUPPORTED_FORMATS
     
     def validate_audio_file(self, file_path: Union[str, Path]) -> bool:
         """
@@ -553,28 +313,7 @@ class AudioManager:
             bool: True if file is valid and compatible, False otherwise
         """
         try:
-            file_path = Path(file_path)
-            
-            # Check if file exists
-            if not file_path.exists():
-                self.logger.error(f"Audio file not found: {file_path}")
-                return False
-            
-            # Check file format
-            if not self._is_supported_format(file_path):
-                self.logger.error(f"Unsupported audio format: {file_path.suffix}")
-                return False
-            
-            # Try to load the file to verify it's valid
-            try:
-                test_sound = pygame.mixer.Sound(str(file_path))
-                # If we get here, the file is valid
-                del test_sound  # Clean up
-                return True
-            except pygame.error as e:
-                self.logger.error(f"Invalid audio file {file_path}: {e}")
-                return False
-                
+            return self.audio_backend.validate_audio_file(file_path)
         except Exception as e:
             self.logger.error(f"Error validating audio file {file_path}: {e}")
             return False
@@ -587,14 +326,8 @@ class AudioManager:
             # Stop all sounds
             self.stop_all_sounds()
             
-            # Clear sound files
-            with self._lock:
-                self._sound_files.clear()
-                self._channels.clear()
-            
-            # Quit pygame mixer
-            if pygame.mixer.get_init():
-                pygame.mixer.quit()
+            # Cleanup backend
+            self.audio_backend.cleanup()
             
             self._initialized = False
             self.logger.info("Audio manager cleanup completed")

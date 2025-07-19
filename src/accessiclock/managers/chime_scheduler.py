@@ -14,7 +14,7 @@ from enum import Enum
 
 from ..utils.logging_config import get_logger
 from ..utils.error_handler import get_error_handler, ErrorCategory
-from .audio_manager import AudioManager, AudioType
+from ..interfaces.audio_interface import AudioType
 
 
 class ChimeInterval(Enum):
@@ -32,7 +32,7 @@ class ChimeScheduler:
     simultaneous ticking and chime playback using the AudioManager.
     """
     
-    def __init__(self, audio_manager: AudioManager, error_handler=None):
+    def __init__(self, audio_manager, error_handler=None):
         """
         Initialize the ChimeScheduler.
         
