@@ -130,13 +130,33 @@ class SettingsDialog(wx.Dialog):
         startup_sizer = wx.StaticBoxSizer(startup_box, wx.VERTICAL)
         
         self.start_minimized = wx.CheckBox(panel, label="Start minimized to tray")
+        self.minimize_to_tray = wx.CheckBox(panel, label="Minimize to tray when closing")
         self.start_with_windows = wx.CheckBox(panel, label="Start with Windows")
         self.play_startup_sound = wx.CheckBox(panel, label="Play startup sound")
         
         startup_sizer.Add(self.start_minimized, 0, wx.ALL, 5)
+        startup_sizer.Add(self.minimize_to_tray, 0, wx.ALL, 5)
         startup_sizer.Add(self.start_with_windows, 0, wx.ALL, 5)
         startup_sizer.Add(self.play_startup_sound, 0, wx.ALL, 5)
         sizer.Add(startup_sizer, 0, wx.EXPAND | wx.ALL, 10)
+
+        hotkey_box = wx.StaticBox(panel, label="Global Hotkey")
+        hotkey_sizer = wx.StaticBoxSizer(hotkey_box, wx.VERTICAL)
+        self.global_hotkeys_enabled = wx.CheckBox(
+            panel, label="Enable global hotkey to announce the time"
+        )
+        hotkey_sizer.Add(self.global_hotkeys_enabled, 0, wx.ALL, 5)
+        self.hotkey_label = wx.StaticText(panel, label="Current global hotkey: Ctrl+Alt+T")
+        hotkey_sizer.Add(self.hotkey_label, 0, wx.ALL, 5)
+        sizer.Add(hotkey_sizer, 0, wx.EXPAND | wx.ALL, 10)
+
+        audio_box = wx.StaticBox(panel, label="Audio Output")
+        audio_sizer = wx.StaticBoxSizer(audio_box, wx.VERTICAL)
+        self.audio_device_label = wx.StaticText(panel, label="Audio output: Default system device")
+        audio_sizer.Add(self.audio_device_label, 0, wx.ALL, 5)
+        self.audio_device_btn = wx.Button(panel, label="Choose Audio Device...")
+        audio_sizer.Add(self.audio_device_btn, 0, wx.ALL, 5)
+        sizer.Add(audio_sizer, 0, wx.EXPAND | wx.ALL, 10)
         
         # Announce on focus
         self.announce_on_focus = wx.CheckBox(
@@ -328,12 +348,14 @@ class SettingsDialog(wx.Dialog):
         self.Bind(wx.EVT_BUTTON, self._on_apply, id=wx.ID_APPLY)
         
         self.test_voice_btn.Bind(wx.EVT_BUTTON, self._on_test_voice)
+        self.audio_device_btn.Bind(wx.EVT_BUTTON, self._on_audio_device)
         self.open_logs_btn.Bind(wx.EVT_BUTTON, self._on_open_logs)
         self.reset_btn.Bind(wx.EVT_BUTTON, self._on_reset)
         
         # Track changes
         for ctrl in [self.format_12h, self.format_24h, self.start_minimized,
-                     self.start_with_windows, self.play_startup_sound,
+                     self.minimize_to_tray, self.start_with_windows, self.play_startup_sound,
+                     self.global_hotkeys_enabled,
                      self.announce_on_focus, self.voice_choice, self.rate_slider,
                      self.style_simple, self.style_natural, self.style_precise,
                      self.quiet_hours_enabled, self.quiet_start_hour,
@@ -357,9 +379,17 @@ class SettingsDialog(wx.Dialog):
         
         # Startup options
         self.start_minimized.SetValue(config.get("start_minimized", False))
+        self.minimize_to_tray.SetValue(config.get("minimize_to_tray", False))
         self.start_with_windows.SetValue(config.get("start_with_windows", False))
         self.play_startup_sound.SetValue(config.get("play_startup_sound", True))
         self.announce_on_focus.SetValue(config.get("announce_on_focus", False))
+        self.global_hotkeys_enabled.SetValue(config.get("global_hotkeys_enabled", False))
+        self.hotkey_label.SetLabel(
+            f"Current global hotkey: {config.get('speak_time_hotkey', 'Ctrl+Alt+T')}"
+        )
+        self.audio_device_label.SetLabel(
+            f"Audio output: {config.get('audio_device_name') or 'Default system device'}"
+        )
         
         # Voice settings
         if self.app.tts_engine:
@@ -395,9 +425,13 @@ class SettingsDialog(wx.Dialog):
         
         # Startup options
         config["start_minimized"] = self.start_minimized.GetValue()
+        config["minimize_to_tray"] = self.minimize_to_tray.GetValue()
         config["start_with_windows"] = self.start_with_windows.GetValue()
         config["play_startup_sound"] = self.play_startup_sound.GetValue()
         config["announce_on_focus"] = self.announce_on_focus.GetValue()
+        config["global_hotkeys_enabled"] = self.global_hotkeys_enabled.GetValue()
+        config["speak_time_hotkey"] = self.app.speak_time_hotkey
+        config["audio_device_name"] = self.app.audio_device_name
         
         # Voice settings
         config["speech_rate"] = self.rate_slider.GetValue()
@@ -420,6 +454,10 @@ class SettingsDialog(wx.Dialog):
         # Update app state
         if self.app.tts_engine:
             self.app.tts_engine.rate = config["speech_rate"]
+
+        self.app.minimize_to_tray = config["minimize_to_tray"]
+        self.app.global_hotkeys_enabled = config["global_hotkeys_enabled"]
+        self.app.speak_time_hotkey = config["speak_time_hotkey"]
         
         if self.app.clock_service:
             if config["quiet_hours_enabled"]:
@@ -439,6 +477,7 @@ class SettingsDialog(wx.Dialog):
         
         # Save to file
         self.app.save_config()
+        self.app.refresh_global_hotkeys()
         logger.info("Settings saved")
 
     def _on_change(self, event: wx.CommandEvent) -> None:
@@ -498,6 +537,22 @@ class SettingsDialog(wx.Dialog):
                 wx.OK | wx.ICON_WARNING
             )
 
+    def _on_audio_device(self, event: wx.CommandEvent) -> None:
+        """Open the audio output picker from settings."""
+        from .audio_device_dialog import AudioDeviceDialog
+
+        dlg = AudioDeviceDialog(self, self.app)
+        try:
+            if dlg.ShowModal() == wx.ID_OK:
+                selected = dlg.get_selected_device_name()
+                if self.app.set_audio_device(selected):
+                    self.audio_device_label.SetLabel(
+                        f"Audio output: {self.app.audio_device_name or 'Default system device'}"
+                    )
+                    self._changes_made = True
+        finally:
+            dlg.Destroy()
+
     def _on_open_logs(self, event: wx.CommandEvent) -> None:
         """Open the logs folder in file explorer."""
         import subprocess
@@ -526,8 +581,10 @@ class SettingsDialog(wx.Dialog):
             self.format_12h.SetValue(True)
             self.format_24h.SetValue(False)
             self.start_minimized.SetValue(False)
+            self.minimize_to_tray.SetValue(False)
             self.start_with_windows.SetValue(False)
             self.play_startup_sound.SetValue(True)
+            self.global_hotkeys_enabled.SetValue(False)
             self.announce_on_focus.SetValue(False)
             self.rate_slider.SetValue(150)
             self.style_simple.SetValue(True)

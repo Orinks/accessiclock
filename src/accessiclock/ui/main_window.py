@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 import wx
+import wx.adv
 
 from ..constants import TIME_FORMAT_12H, TIME_FORMAT_24H, VOLUME_LEVELS
 from ..core.shortcuts import build_shortcut_help
@@ -44,7 +45,7 @@ class MainWindow(wx.Frame):
         super().__init__(
             parent=None,
             title="AccessiClock",
-            size=(680, 760),
+            size=(720, 820),
             style=wx.DEFAULT_FRAME_STYLE,
         )
         self.app = app
@@ -137,6 +138,16 @@ class MainWindow(wx.Frame):
         backend_text = self._get_audio_backend_text()
         self.backend_label = wx.StaticText(panel, label=f"Audio backend: {backend_text}")
         main_sizer.Add(self.backend_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        audio_device_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.audio_device_label = wx.StaticText(
+            panel,
+            label=f"Audio output: {self._get_audio_device_text()}",
+        )
+        audio_device_sizer.Add(self.audio_device_label, 1, wx.ALIGN_CENTER_VERTICAL)
+        self.audio_device_button = wx.Button(panel, label="Audio &Device...")
+        audio_device_sizer.Add(self.audio_device_button, 0)
+        main_sizer.Add(audio_device_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # Chime intervals
         intervals_label = wx.StaticText(panel, label="Chime Intervals:")
@@ -289,6 +300,7 @@ class MainWindow(wx.Frame):
         # File menu
         file_menu = wx.Menu()
         settings_item = file_menu.Append(wx.ID_PREFERENCES, "&Settings\tCtrl+,")
+        audio_device_item = file_menu.Append(wx.ID_ANY, "Audio &Device...\tCtrl+D")
         file_menu.AppendSeparator()
         exit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tAlt+F4")
         menubar.Append(file_menu, "&File")
@@ -310,6 +322,7 @@ class MainWindow(wx.Frame):
 
         # Bind menu events
         self.Bind(wx.EVT_MENU, self._on_settings, settings_item)
+        self.Bind(wx.EVT_MENU, self._on_audio_device, audio_device_item)
         self.Bind(wx.EVT_MENU, self._on_exit, exit_item)
         self.Bind(wx.EVT_MENU, self._on_test_chime, test_item)
         self.Bind(wx.EVT_MENU, self._on_announce_time, announce_item)
@@ -320,10 +333,12 @@ class MainWindow(wx.Frame):
         """Bind event handlers."""
         # Window events
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_ICONIZE, self._on_iconize)
 
         # Control events
         self.clock_selection.Bind(wx.EVT_COMBOBOX, self._on_clock_changed)
         self.volume_button.Bind(wx.EVT_BUTTON, self._on_change_volume)
+        self.audio_device_button.Bind(wx.EVT_BUTTON, self._on_audio_device)
         self.hourly_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
         self.half_hour_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
         self.quarter_hour_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
@@ -348,6 +363,23 @@ class MainWindow(wx.Frame):
     def _setup_keyboard_shortcuts(self) -> None:
         """Set up keyboard shortcuts and announce map in logs/status."""
         logger.info("Shortcut map: %s", build_shortcut_help())
+        entries = []
+        for keycode, handler in [
+            (wx.WXK_F5, self._on_test_chime),
+            (ord(" "), self._on_announce_time),
+        ]:
+            item_id = wx.NewIdRef()
+            self.Bind(wx.EVT_MENU, handler, id=item_id)
+            entries.append(wx.AcceleratorEntry(wx.ACCEL_NORMAL, keycode, item_id))
+
+        audio_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, self._on_audio_device, id=audio_id)
+        entries.append(wx.AcceleratorEntry(wx.ACCEL_CTRL, ord("D"), audio_id))
+
+        settings_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, self._on_settings, id=settings_id)
+        entries.append(wx.AcceleratorEntry(wx.ACCEL_CTRL, ord(","), settings_id))
+        self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
     def _set_initial_focus(self) -> None:
         """Move focus to a stable control to help screen reader users on startup."""
@@ -372,6 +404,10 @@ class MainWindow(wx.Frame):
         if not self.app.audio_player:
             return "unavailable"
         return getattr(self.app.audio_player, "backend_name", "available")
+
+    def _get_audio_device_text(self) -> str:
+        """Return the configured audio device display text."""
+        return self.app.audio_device_name or "Default system device"
 
     def _parse_hhmm(self, value: str, default: str) -> tuple[int, int]:
         """Parse HH:MM text for spin controls."""
@@ -406,6 +442,8 @@ class MainWindow(wx.Frame):
     def _on_clock_tick(self, event: wx.TimerEvent) -> None:
         """Handle clock timer tick."""
         self.clock_display.SetValue(self._get_current_time())
+        if self.app.system_tray_icon:
+            self.app.system_tray_icon.update_tooltip(f"AccessiClock {self._get_current_time()}")
 
         if self.app.check_and_trigger_alarm():
             self._set_status("Alarm triggered")
@@ -439,6 +477,9 @@ class MainWindow(wx.Frame):
         self.volume_label.SetLabel(f"Volume: {new_volume}%")
         self._set_status(f"Volume set to {new_volume}%")
         logger.info(f"Volume changed to: {new_volume}%")
+
+    def _on_audio_device(self, event: wx.CommandEvent) -> None:
+        self.open_audio_device_dialog()
 
     def _on_interval_changed(self, event: wx.CommandEvent) -> None:
         """Handle chime interval checkbox changes."""
@@ -563,14 +604,41 @@ class MainWindow(wx.Frame):
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
         """Handle settings button/menu."""
+        self.open_settings_dialog()
+
+    def open_settings_dialog(self) -> None:
+        """Open settings from buttons, menu items, or the tray menu."""
         from .dialogs import SettingsDialog
         
         dlg = SettingsDialog(self, self.app)
-        dlg.ShowModal()
-        dlg.Destroy()
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+        self._refresh_runtime_labels()
         
         self._set_status("Settings updated")
         logger.info("Settings dialog closed")
+
+    def open_audio_device_dialog(self) -> None:
+        """Open the audio-device picker and apply the selected output."""
+        from .dialogs import AudioDeviceDialog
+
+        dlg = AudioDeviceDialog(self, self.app)
+        try:
+            if dlg.ShowModal() == wx.ID_OK:
+                selected = dlg.get_selected_device_name()
+                if self.app.set_audio_device(selected):
+                    self._refresh_runtime_labels()
+                    self._set_status(f"Audio output: {self._get_audio_device_text()}")
+                else:
+                    self._set_status("Could not change audio output device")
+        finally:
+            dlg.Destroy()
+
+    def _refresh_runtime_labels(self) -> None:
+        self.backend_label.SetLabel(f"Audio backend: {self._get_audio_backend_text()}")
+        self.audio_device_label.SetLabel(f"Audio output: {self._get_audio_device_text()}")
 
     def _on_manage_clocks(self, event: wx.CommandEvent) -> None:
         """Handle manage clocks menu item."""
@@ -619,11 +687,16 @@ class MainWindow(wx.Frame):
 
     def _on_exit(self, event: wx.CommandEvent) -> None:
         """Handle exit menu item."""
-        self.Close()
+        self.app.request_exit()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
         """Handle window close."""
         logger.info("Main window closing")
+        if self.app.should_minimize_to_tray():
+            event.Veto()
+            self.Hide()
+            self._set_status("AccessiClock minimized to the system tray")
+            return
 
         # Stop timer
         if self._clock_timer:
@@ -635,7 +708,19 @@ class MainWindow(wx.Frame):
         # Destroy window
         self.Destroy()
 
+    def _on_iconize(self, event: wx.IconizeEvent) -> None:
+        """Hide the window when minimized if tray minimization is enabled."""
+        if event.IsIconized() and self.app.should_minimize_to_tray():
+            self.Hide()
+            self._set_status("AccessiClock minimized to the system tray")
+            return
+        event.Skip()
+
     def _set_status(self, message: str) -> None:
         """Update the status label."""
         self.status_label.SetLabel(message)
         logger.debug(f"Status: {message}")
+
+    def set_status_from_app(self, message: str) -> None:
+        """Allow app/tray actions to update the accessible status text."""
+        self._set_status(message)

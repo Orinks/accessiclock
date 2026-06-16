@@ -44,7 +44,7 @@ class AudioPlayer:
     without blocking the UI thread. Falls back to playsound3 on non-Windows.
     """
 
-    def __init__(self, volume_percent: int = 50):
+    def __init__(self, volume_percent: int = 50, audio_device_name: str = ""):
         """
         Initialize AudioPlayer.
 
@@ -54,19 +54,13 @@ class AudioPlayer:
         global _bass_initialized
 
         self._current_stream: Any | None = None
+        self._audio_output: Any | None = None
+        self._audio_device_name = audio_device_name.strip()
         self._volume = self._clamp_volume(volume_percent)
 
         # Initialize BASS audio library if using sound_lib
-        if _use_sound_lib and not _bass_initialized:
-            try:
-                from sound_lib import output
-
-                output.Output()  # Initialize default output device
-                _bass_initialized = True
-                logger.info("BASS audio system initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize BASS audio system: {e}")
-                raise
+        if _use_sound_lib:
+            self._initialize_sound_lib_output(self._audio_device_name)
 
         logger.info(f"AudioPlayer initialized with volume {self._volume}%")
 
@@ -74,6 +68,68 @@ class AudioPlayer:
     def backend_name(self) -> str:
         """Return the active audio backend name."""
         return get_audio_backend_name()
+
+    def _initialize_sound_lib_output(self, device_name: str = "") -> None:
+        """Initialize sound_lib/BASS for the default or named output device."""
+        global _bass_initialized
+
+        try:
+            from sound_lib import output
+
+            self._audio_output = output.Output()
+            if device_name:
+                device_index = self._audio_output.find_user_provided_device(device_name)
+                self._audio_output.set_device(device_index)
+            self._audio_device_name = device_name
+            _bass_initialized = True
+            logger.info(
+                "BASS audio system initialized using %s",
+                device_name or "default system device",
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize BASS audio system: {e}")
+            raise
+
+    def list_output_devices(self) -> list[str]:
+        """Return available output devices for the current backend."""
+        devices = ["Default system device"]
+        if not _use_sound_lib:
+            return devices
+
+        try:
+            from sound_lib import output
+
+            for name in output.Output.get_device_names():
+                clean_name = str(name).strip()
+                if clean_name and clean_name.lower() != "default" and clean_name not in devices:
+                    devices.append(clean_name)
+        except Exception:
+            logger.warning("Unable to enumerate sound_lib output devices", exc_info=True)
+        return devices
+
+    def set_output_device(self, device_name: str) -> None:
+        """Switch to the default or named sound_lib output device."""
+        global _bass_initialized
+
+        clean_name = device_name.strip()
+        if clean_name == "Default system device":
+            clean_name = ""
+        if not _use_sound_lib:
+            self._audio_device_name = clean_name
+            return
+        if self._current_stream:
+            self.stop()
+        if self._audio_output:
+            try:
+                self._audio_output.free()
+            except Exception:
+                logger.debug("Ignoring error while freeing previous output", exc_info=True)
+        _bass_initialized = False
+        self._initialize_sound_lib_output(clean_name)
+
+    def get_output_device_name(self) -> str:
+        """Return the selected output device name, or blank for the default."""
+        return self._audio_device_name
 
     def _clamp_volume(self, volume_percent: int) -> int:
         """Clamp volume to valid range (0-100)."""
@@ -241,5 +297,11 @@ class AudioPlayer:
 
         # Reset BASS initialization flag
         if _use_sound_lib and _bass_initialized:
+            audio_output = getattr(self, "_audio_output", None)
+            if audio_output:
+                try:
+                    audio_output.free()
+                except Exception:
+                    logger.debug("Ignoring error while freeing output", exc_info=True)
             _bass_initialized = False
             logger.info("BASS audio system cleanup complete")

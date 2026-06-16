@@ -39,6 +39,37 @@ def test_load_settings_reads_clock_chime_options(tmp_path: Path):
     assert settings.alarm_spoken_text == "Wake up"
 
 
+def test_load_settings_reads_tray_hotkey_and_audio_device_options(tmp_path: Path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        (
+            '{"minimize_to_tray": true, "global_hotkeys_enabled": true, '
+            '"speak_time_hotkey": "Ctrl+Alt+T", "audio_device_name": "Speakers"}'
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_file)
+
+    assert settings.minimize_to_tray is True
+    assert settings.global_hotkeys_enabled is True
+    assert settings.speak_time_hotkey == "Ctrl+Alt+T"
+    assert settings.audio_device_name == "Speakers"
+
+
+def test_load_settings_rejects_blank_hotkey_and_normalizes_audio_device(tmp_path: Path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        '{"speak_time_hotkey": " ", "audio_device_name": ""}',
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_file)
+
+    assert settings.speak_time_hotkey == "Ctrl+Alt+T"
+    assert settings.audio_device_name == ""
+
+
 def test_load_settings_rejects_unknown_chime_style(tmp_path: Path):
     config_file = tmp_path / "config.json"
     config_file.write_text('{"chime_style": "mystery"}', encoding="utf-8")
@@ -60,6 +91,10 @@ def test_save_and_load_round_trip(tmp_path: Path):
         alarm_enabled=True,
         alarm_time="06:45",
         alarm_spoken_text="Coffee is ready",
+        minimize_to_tray=True,
+        global_hotkeys_enabled=True,
+        speak_time_hotkey="Ctrl+Alt+T",
+        audio_device_name="Headphones",
     )
 
     save_settings(config_file, expected)

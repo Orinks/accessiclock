@@ -128,6 +128,108 @@ class TestVolumeControl:
         assert player._convert_volume_to_decimal(50) == 0.5
         assert player._convert_volume_to_decimal(100) == 1.0
 
+
+class TestAudioDeviceSelection:
+    """Test sound_lib output device selection helpers."""
+
+    def test_list_output_devices_returns_default_for_fallback_backend(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = ""
+
+            assert player.list_output_devices() == ["Default system device"]
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_list_output_devices_includes_sound_lib_devices(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = ""
+
+            mock_output_module = MagicMock()
+            mock_output_module.Output.get_device_names.return_value = ["Default", "Speakers"]
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                assert player.list_output_devices() == [
+                    "Default system device",
+                    "Speakers",
+                ]
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_set_output_device_reinitializes_sound_lib_output(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        original_init = player_module._bass_initialized
+        try:
+            player_module._use_sound_lib = True
+            player_module._bass_initialized = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            old_output = MagicMock()
+            player._audio_output = old_output
+            player._audio_device_name = ""
+
+            new_output = MagicMock()
+            new_output.find_user_provided_device.return_value = 2
+            mock_output_module = MagicMock()
+            mock_output_module.Output.return_value = new_output
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                player.set_output_device("Speakers")
+
+            old_output.free.assert_called_once()
+            mock_output_module.Output.assert_called_once()
+            new_output.find_user_provided_device.assert_called_once_with("Speakers")
+            new_output.set_device.assert_called_once_with(2)
+            assert player.get_output_device_name() == "Speakers"
+        finally:
+            player_module._use_sound_lib = original_use
+            player_module._bass_initialized = original_init
+
+    def test_set_output_device_default_uses_default_sound_lib_output(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        original_init = player_module._bass_initialized
+        try:
+            player_module._use_sound_lib = True
+            player_module._bass_initialized = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = "Speakers"
+
+            mock_output_module = MagicMock()
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                player.set_output_device("")
+
+            mock_output_module.Output.assert_called_once_with()
+            assert player.get_output_device_name() == ""
+            assert player_module._bass_initialized is True
+        finally:
+            player_module._use_sound_lib = original_use
+            player_module._bass_initialized = original_init
+
     def test_set_volume_updates_playing_stream(self):
         """set_volume should update volume on currently playing stream."""
         import accessiclock.audio.player as player_module

@@ -156,6 +156,59 @@ class TestAppIntegration:
         from accessiclock.audio.player import AudioPlayer
         assert AudioPlayer is not None
 
+    def test_save_config_persists_tray_hotkey_and_audio_device_settings(self, temp_dir):
+        from accessiclock.app import AccessiClockApp
+        from accessiclock.core.settings import load_settings
+
+        class FakePaths:
+            config_file = temp_dir / "config.json"
+
+        app = AccessiClockApp.__new__(AccessiClockApp)
+        app.paths = FakePaths()
+        app.settings = load_settings(app.paths.config_file)
+        app.config = app.settings.to_dict()
+        app.clock_service = None
+        app.current_volume = 50
+        app.selected_clock = "default"
+        app.chime_hourly = True
+        app.chime_half_hour = False
+        app.chime_quarter_hour = False
+        app.chime_style = "classic"
+        app.hour_count_chimes = False
+        app.minute_tick = False
+        app.quiet_hours_enabled = False
+        app.quiet_start = "22:00"
+        app.quiet_end = "07:00"
+        app.alarm_enabled = False
+        app.alarm_time = "07:00"
+        app.alarm_sound_enabled = True
+        app.alarm_spoken_text = "Time to get up"
+        app.minimize_to_tray = True
+        app.global_hotkeys_enabled = True
+        app.speak_time_hotkey = "Ctrl+Alt+T"
+        app.audio_device_name = "Speakers"
+
+        app.save_config()
+
+        loaded = load_settings(app.paths.config_file)
+        assert loaded.minimize_to_tray is True
+        assert loaded.global_hotkeys_enabled is True
+        assert loaded.speak_time_hotkey == "Ctrl+Alt+T"
+        assert loaded.audio_device_name == "Speakers"
+
+    def test_set_audio_device_keeps_previous_device_on_failure(self):
+        from accessiclock.app import AccessiClockApp
+
+        app = AccessiClockApp.__new__(AccessiClockApp)
+        app.audio_device_name = "Headphones"
+        app.audio_player = MagicMock()
+        app.audio_player.set_output_device.side_effect = RuntimeError("device missing")
+        app.save_config = MagicMock()
+
+        assert app.set_audio_device("Speakers") is False
+        assert app.audio_device_name == "Headphones"
+        app.save_config.assert_not_called()
+
 
 class TestAppChimePlayback:
     """Test app chime and alarm orchestration without starting wx."""

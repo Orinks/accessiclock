@@ -37,6 +37,10 @@ class AppSettings:
     announce_on_focus: bool = False
     speech_rate: int = 150
     announcement_style: str = "simple"
+    minimize_to_tray: bool = False
+    global_hotkeys_enabled: bool = False
+    speak_time_hotkey: str = "Ctrl+Alt+T"
+    audio_device_name: str = ""
     debug_logging: bool = False
 
     @classmethod
@@ -67,6 +71,10 @@ class AppSettings:
             announcement_style=_valid_choice(
                 raw.get("announcement_style"), VALID_ANNOUNCEMENT_STYLES, "simple"
             ),
+            minimize_to_tray=bool(raw.get("minimize_to_tray", False)),
+            global_hotkeys_enabled=bool(raw.get("global_hotkeys_enabled", False)),
+            speak_time_hotkey=_non_blank_string(raw.get("speak_time_hotkey"), "Ctrl+Alt+T"),
+            audio_device_name=_optional_string(raw.get("audio_device_name", "")),
             debug_logging=bool(raw.get("debug_logging", False)),
         )
         return settings
@@ -92,6 +100,15 @@ def _valid_choice(value: object, choices: set[str], default: str) -> str:
     if choice in choices:
         return choice
     return default
+
+
+def _non_blank_string(value: object, default: str) -> str:
+    text = str(value or "").strip()
+    return text or default
+
+
+def _optional_string(value: object) -> str:
+    return str(value or "").strip()
 
 
 def _time_string(value: object, default: str) -> str:

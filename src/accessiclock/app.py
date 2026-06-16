@@ -17,7 +17,9 @@ from .services.clock_service import ChimeStyle, ClockService
 
 if TYPE_CHECKING:
     from .audio.player import AudioPlayer
+    from .ui.global_hotkeys import GlobalHotkeyManager
     from .ui.main_window import MainWindow
+    from .ui.system_tray import SystemTrayIcon
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,9 @@ class AccessiClockApp(wx.App):
         self.tts_engine: TTSEngine | None = None
         self.clock_service: ClockService | None = None
         self.clock_pack_loader: ClockPackLoader | None = None
+        self.system_tray_icon: SystemTrayIcon | None = None
+        self.global_hotkey_manager: GlobalHotkeyManager | None = None
+        self._exiting = False
 
         self.settings = AppSettings()
         self.config = self.settings.to_dict()
@@ -52,6 +57,10 @@ class AccessiClockApp(wx.App):
         self.quiet_hours_enabled = self.settings.quiet_hours_enabled
         self.quiet_start = self.settings.quiet_start
         self.quiet_end = self.settings.quiet_end
+        self.minimize_to_tray = self.settings.minimize_to_tray
+        self.global_hotkeys_enabled = self.settings.global_hotkeys_enabled
+        self.speak_time_hotkey = self.settings.speak_time_hotkey
+        self.audio_device_name = self.settings.audio_device_name
 
         super().__init__()
 
@@ -68,16 +77,21 @@ class AccessiClockApp(wx.App):
 
     def _startup(self) -> None:
         self._init_services()
+        self._load_config()
         self._init_audio()
         self._init_tts()
-        self._load_config()
         self._sync_service_settings()
 
         from .ui.main_window import MainWindow
 
         self.main_window = MainWindow(self)
-        self.main_window.Show()
         self.SetTopWindow(self.main_window)
+        self._init_system_tray()
+        self._init_global_hotkeys()
+        if self.settings.start_minimized and self.system_tray_icon:
+            self.main_window.Hide()
+        else:
+            self.main_window.Show()
 
     def _init_services(self) -> None:
         self.clock_service = ClockService()
@@ -88,7 +102,10 @@ class AccessiClockApp(wx.App):
         try:
             from .audio.player import AudioPlayer
 
-            self.audio_player = AudioPlayer(volume_percent=self.current_volume)
+            self.audio_player = AudioPlayer(
+                volume_percent=self.current_volume,
+                audio_device_name=self.audio_device_name,
+            )
         except Exception:
             logger.warning("Audio player unavailable", exc_info=True)
             self.audio_player = None
@@ -142,6 +159,10 @@ class AccessiClockApp(wx.App):
         self.quiet_hours_enabled = self.settings.quiet_hours_enabled
         self.quiet_start = self.settings.quiet_start
         self.quiet_end = self.settings.quiet_end
+        self.minimize_to_tray = self.settings.minimize_to_tray
+        self.global_hotkeys_enabled = self.settings.global_hotkeys_enabled
+        self.speak_time_hotkey = self.settings.speak_time_hotkey
+        self.audio_device_name = self.settings.audio_device_name
 
         if self.clock_service and self.settings.quiet_hours_enabled:
             try:
@@ -188,6 +209,10 @@ class AccessiClockApp(wx.App):
                 "alarm_time": self.alarm_time,
                 "alarm_sound_enabled": self.alarm_sound_enabled,
                 "alarm_spoken_text": self.alarm_spoken_text,
+                "minimize_to_tray": self.minimize_to_tray,
+                "global_hotkeys_enabled": self.global_hotkeys_enabled,
+                "speak_time_hotkey": self.speak_time_hotkey,
+                "audio_device_name": self.audio_device_name,
             }
         )
         self.settings = AppSettings(
@@ -201,6 +226,27 @@ class AccessiClockApp(wx.App):
         if self.audio_player:
             self.audio_player.set_volume(self.current_volume)
         self.save_config()
+
+    def get_audio_output_devices(self) -> list[str]:
+        if not self.audio_player:
+            return ["Default system device"]
+        return self.audio_player.list_output_devices()
+
+    def set_audio_device(self, device_name: str) -> bool:
+        clean_name = device_name.strip()
+        if clean_name == "Default system device":
+            clean_name = ""
+        previous_name = self.audio_device_name
+        self.audio_device_name = clean_name
+        if self.audio_player:
+            try:
+                self.audio_player.set_output_device(clean_name)
+            except Exception:
+                self.audio_device_name = previous_name
+                logger.warning("Unable to switch audio device to %s", clean_name, exc_info=True)
+                return False
+        self.save_config()
+        return True
 
     def play_chime(self, chime_type: str) -> bool:
         if not self.audio_player or not self.clock_pack_loader:
@@ -258,6 +304,62 @@ class AccessiClockApp(wx.App):
         self.tts_engine.speak_time(datetime.now().time(), style=cast(TimeStyle, style))
         return True
 
+    def _init_system_tray(self) -> None:
+        try:
+            from .ui.system_tray import SystemTrayIcon
+
+            self.system_tray_icon = SystemTrayIcon(self)
+            logger.info("System tray icon initialized")
+        except Exception:
+            self.system_tray_icon = None
+            logger.warning("System tray icon unavailable", exc_info=True)
+
+    def _init_global_hotkeys(self) -> None:
+        if not self.main_window or not self.global_hotkeys_enabled:
+            return
+        try:
+            from .ui.global_hotkeys import GlobalHotkeyManager
+
+            self.global_hotkey_manager = GlobalHotkeyManager(self.main_window)
+            if self.global_hotkey_manager.register(
+                self.speak_time_hotkey,
+                self._announce_time_from_hotkey,
+            ):
+                logger.info("Registered global hotkey %s", self.speak_time_hotkey)
+            else:
+                logger.warning("Could not register global hotkey %s", self.speak_time_hotkey)
+        except Exception:
+            self.global_hotkey_manager = None
+            logger.warning("Global hotkey registration failed", exc_info=True)
+
+    def _announce_time_from_hotkey(self) -> None:
+        self.announce_time(style=self.config.get("announcement_style", "simple"))
+        if self.main_window:
+            self.main_window.set_status_from_app("Announced current time from global hotkey")
+
+    def refresh_global_hotkeys(self) -> None:
+        if self.global_hotkey_manager:
+            self.global_hotkey_manager.unregister()
+            self.global_hotkey_manager = None
+        self._init_global_hotkeys()
+
+    def should_minimize_to_tray(self) -> bool:
+        return bool(self.minimize_to_tray and self.system_tray_icon and not self._exiting)
+
+    def show_main_window(self) -> None:
+        if not self.main_window:
+            return
+        self.main_window.Show(True)
+        if self.main_window.IsIconized():
+            self.main_window.Iconize(False)
+        self.main_window.Raise()
+        self.main_window.SetFocus()
+
+    def request_exit(self) -> None:
+        self._exiting = True
+        if self.main_window:
+            self.main_window.Close(True)
+
     def check_and_play_chime(self, current_time: dt_time | None = None) -> str | None:
         if not self.clock_service:
             return None
@@ -301,6 +403,17 @@ class AccessiClockApp(wx.App):
     def OnExit(self) -> int:
         logger.info("Shutting down AccessiClock")
         self.save_config()
+
+        if self.global_hotkey_manager:
+            try:
+                self.global_hotkey_manager.unregister()
+            except Exception:
+                logger.warning("Global hotkey cleanup failed", exc_info=True)
+        if self.system_tray_icon:
+            try:
+                self.system_tray_icon.cleanup()
+            except Exception:
+                logger.warning("System tray cleanup failed", exc_info=True)
 
         if self.audio_player:
             try:

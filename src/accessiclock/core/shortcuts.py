@@ -17,6 +17,8 @@ def default_shortcuts() -> list[Shortcut]:
         Shortcut("F5", "Test chime"),
         Shortcut("Space", "Announce current time"),
         Shortcut("Ctrl+,", "Open settings"),
+        Shortcut("Ctrl+D", "Choose audio output device"),
+        Shortcut("Ctrl+Alt+T", "Global hotkey to announce current time when enabled"),
         Shortcut("Alt+F4", "Exit application"),
         Shortcut("Tab / Shift+Tab", "Move focus between controls"),
     ]
