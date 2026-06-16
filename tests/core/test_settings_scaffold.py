@@ -17,9 +17,50 @@ def test_load_settings_clamps_volume(tmp_path: Path):
     assert settings.clock == "digital"
 
 
+def test_load_settings_reads_clock_chime_options(tmp_path: Path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        (
+            '{"chime_style": "grandfather", "hour_count_chimes": true, '
+            '"minute_tick": true, "alarm_enabled": true, "alarm_time": "07:30", '
+            '"alarm_sound_enabled": false, "alarm_spoken_text": "Wake up"}'
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_file)
+
+    assert settings.chime_style == "grandfather"
+    assert settings.hour_count_chimes is True
+    assert settings.minute_tick is True
+    assert settings.alarm_enabled is True
+    assert settings.alarm_time == "07:30"
+    assert settings.alarm_sound_enabled is False
+    assert settings.alarm_spoken_text == "Wake up"
+
+
+def test_load_settings_rejects_unknown_chime_style(tmp_path: Path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text('{"chime_style": "mystery"}', encoding="utf-8")
+
+    settings = load_settings(config_file)
+
+    assert settings.chime_style == "classic"
+
+
 def test_save_and_load_round_trip(tmp_path: Path):
     config_file = tmp_path / "nested" / "config.json"
-    expected = AppSettings(volume=25, clock="westminster", chime_half_hour=True)
+    expected = AppSettings(
+        volume=25,
+        clock="westminster",
+        chime_half_hour=True,
+        chime_style="grandfather",
+        hour_count_chimes=True,
+        minute_tick=True,
+        alarm_enabled=True,
+        alarm_time="06:45",
+        alarm_spoken_text="Coffee is ready",
+    )
 
     save_settings(config_file, expected)
     loaded = load_settings(config_file)

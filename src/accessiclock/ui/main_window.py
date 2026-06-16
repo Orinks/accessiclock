@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import wx
 
-from ..constants import TIME_FORMAT_12H, VOLUME_LEVELS
+from ..constants import TIME_FORMAT_12H, TIME_FORMAT_24H, VOLUME_LEVELS
 from ..core.shortcuts import build_shortcut_help
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ class MainWindow(wx.Frame):
         super().__init__(
             parent=None,
             title="AccessiClock",
-            size=(500, 450),
+            size=(680, 760),
             style=wx.DEFAULT_FRAME_STYLE,
         )
         self.app = app
@@ -69,7 +69,8 @@ class MainWindow(wx.Frame):
 
     def _create_widgets(self) -> None:
         """Create all UI widgets."""
-        panel = wx.Panel(self)
+        panel = wx.ScrolledWindow(self)
+        panel.SetScrollRate(0, 20)
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
         # Clock display - large, readable, screen reader accessible
@@ -132,6 +133,11 @@ class MainWindow(wx.Frame):
 
         main_sizer.AddSpacer(10)
 
+        # Audio backend status
+        backend_text = self._get_audio_backend_text()
+        self.backend_label = wx.StaticText(panel, label=f"Audio backend: {backend_text}")
+        main_sizer.Add(self.backend_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         # Chime intervals
         intervals_label = wx.StaticText(panel, label="Chime Intervals:")
         intervals_label.SetFont(
@@ -151,6 +157,110 @@ class MainWindow(wx.Frame):
         self.quarter_hour_checkbox.SetValue(self.app.chime_quarter_hour)
         main_sizer.Add(self.quarter_hour_checkbox, 0, wx.LEFT | wx.TOP, 15)
 
+        main_sizer.AddSpacer(10)
+
+        # Chime style and extra scheduled sounds
+        style_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        style_label = wx.StaticText(panel, label="Chime style:")
+        style_sizer.Add(style_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        self.chime_style_choice = wx.Choice(
+            panel,
+            choices=["Classic single chime", "Grandfather counted chimes"],
+        )
+        self.chime_style_choice.SetSelection(1 if self.app.chime_style == "grandfather" else 0)
+        style_sizer.Add(self.chime_style_choice, 1, wx.EXPAND)
+        main_sizer.Add(style_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+
+        self.hour_count_checkbox = wx.CheckBox(panel, label="Count the hour on hourly chimes")
+        self.hour_count_checkbox.SetValue(self.app.hour_count_chimes)
+        main_sizer.Add(self.hour_count_checkbox, 0, wx.LEFT | wx.TOP, 15)
+
+        self.minute_tick_checkbox = wx.CheckBox(panel, label="Play a minute tick")
+        self.minute_tick_checkbox.SetValue(self.app.minute_tick)
+        main_sizer.Add(self.minute_tick_checkbox, 0, wx.LEFT | wx.TOP, 15)
+
+        main_sizer.AddSpacer(12)
+
+        # Quiet hours controls
+        quiet_label = wx.StaticText(panel, label="Quiet Hours:")
+        quiet_label.SetFont(quiet_label.GetFont().Bold())
+        main_sizer.Add(quiet_label, 0, wx.LEFT, 10)
+
+        self.quiet_enabled_checkbox = wx.CheckBox(panel, label="Enable quiet hours")
+        self.quiet_enabled_checkbox.SetValue(self.app.quiet_hours_enabled)
+        main_sizer.Add(self.quiet_enabled_checkbox, 0, wx.LEFT | wx.TOP, 15)
+
+        quiet_start_hour, quiet_start_minute = self._parse_hhmm(self.app.quiet_start, "22:00")
+        quiet_end_hour, quiet_end_minute = self._parse_hhmm(self.app.quiet_end, "07:00")
+
+        quiet_start_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        quiet_start_hour_label = wx.StaticText(panel, label="Quiet start hour:")
+        quiet_start_sizer.Add(quiet_start_hour_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.quiet_start_hour_spin = wx.SpinCtrl(
+            panel, min=0, max=23, initial=quiet_start_hour, size=(70, -1)
+        )
+        quiet_start_sizer.Add(self.quiet_start_hour_spin, 0, wx.RIGHT, 12)
+        quiet_start_minute_label = wx.StaticText(panel, label="Quiet start minute:")
+        quiet_start_sizer.Add(quiet_start_minute_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.quiet_start_minute_spin = wx.SpinCtrl(
+            panel, min=0, max=59, initial=quiet_start_minute, size=(70, -1)
+        )
+        quiet_start_sizer.Add(self.quiet_start_minute_spin, 0)
+        main_sizer.Add(quiet_start_sizer, 0, wx.LEFT | wx.RIGHT | wx.TOP, 15)
+
+        quiet_end_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        quiet_end_hour_label = wx.StaticText(panel, label="Quiet end hour:")
+        quiet_end_sizer.Add(quiet_end_hour_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.quiet_end_hour_spin = wx.SpinCtrl(
+            panel, min=0, max=23, initial=quiet_end_hour, size=(70, -1)
+        )
+        quiet_end_sizer.Add(self.quiet_end_hour_spin, 0, wx.RIGHT, 12)
+        quiet_end_minute_label = wx.StaticText(panel, label="Quiet end minute:")
+        quiet_end_sizer.Add(quiet_end_minute_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.quiet_end_minute_spin = wx.SpinCtrl(
+            panel, min=0, max=59, initial=quiet_end_minute, size=(70, -1)
+        )
+        quiet_end_sizer.Add(self.quiet_end_minute_spin, 0)
+        main_sizer.Add(quiet_end_sizer, 0, wx.LEFT | wx.RIGHT | wx.TOP, 15)
+
+        main_sizer.AddSpacer(12)
+
+        # Alarm controls
+        alarm_label = wx.StaticText(panel, label="Alarm:")
+        alarm_label.SetFont(alarm_label.GetFont().Bold())
+        main_sizer.Add(alarm_label, 0, wx.LEFT, 10)
+
+        self.alarm_enabled_checkbox = wx.CheckBox(panel, label="Enable alarm")
+        self.alarm_enabled_checkbox.SetValue(self.app.alarm_enabled)
+        main_sizer.Add(self.alarm_enabled_checkbox, 0, wx.LEFT | wx.TOP, 15)
+
+        alarm_time_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        alarm_hour_label = wx.StaticText(panel, label="Alarm hour:")
+        alarm_time_sizer.Add(alarm_hour_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+
+        alarm_hour, alarm_minute = self._parse_hhmm(self.app.alarm_time, "07:00")
+        self.alarm_hour_spin = wx.SpinCtrl(panel, min=0, max=23, initial=alarm_hour, size=(70, -1))
+        alarm_time_sizer.Add(self.alarm_hour_spin, 0, wx.RIGHT, 12)
+
+        alarm_minute_label = wx.StaticText(panel, label="Alarm minute:")
+        alarm_time_sizer.Add(alarm_minute_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+
+        self.alarm_minute_spin = wx.SpinCtrl(
+            panel, min=0, max=59, initial=alarm_minute, size=(70, -1)
+        )
+        alarm_time_sizer.Add(self.alarm_minute_spin, 0)
+        main_sizer.Add(alarm_time_sizer, 0, wx.LEFT | wx.RIGHT | wx.TOP, 15)
+
+        self.alarm_sound_checkbox = wx.CheckBox(panel, label="Play alarm sound")
+        self.alarm_sound_checkbox.SetValue(self.app.alarm_sound_enabled)
+        main_sizer.Add(self.alarm_sound_checkbox, 0, wx.LEFT | wx.TOP, 15)
+
+        alarm_text_label = wx.StaticText(panel, label="Alarm spoken text:")
+        main_sizer.Add(alarm_text_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        self.alarm_text_ctrl = wx.TextCtrl(panel, value=self.app.alarm_spoken_text)
+        main_sizer.Add(self.alarm_text_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
+
         main_sizer.AddSpacer(15)
 
         # Action buttons
@@ -161,6 +271,9 @@ class MainWindow(wx.Frame):
 
         self.announce_button = wx.Button(panel, label="&Announce Time")
         button_sizer.Add(self.announce_button, 0, wx.RIGHT, 10)
+
+        self.test_alarm_button = wx.Button(panel, label="Test &Alarm")
+        button_sizer.Add(self.test_alarm_button, 0, wx.RIGHT, 10)
 
         self.settings_button = wx.Button(panel, label="&Settings")
         button_sizer.Add(self.settings_button, 0)
@@ -214,8 +327,22 @@ class MainWindow(wx.Frame):
         self.hourly_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
         self.half_hour_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
         self.quarter_hour_checkbox.Bind(wx.EVT_CHECKBOX, self._on_interval_changed)
+        self.chime_style_choice.Bind(wx.EVT_CHOICE, self._on_chime_options_changed)
+        self.hour_count_checkbox.Bind(wx.EVT_CHECKBOX, self._on_chime_options_changed)
+        self.minute_tick_checkbox.Bind(wx.EVT_CHECKBOX, self._on_chime_options_changed)
+        self.quiet_enabled_checkbox.Bind(wx.EVT_CHECKBOX, self._on_quiet_hours_changed)
+        self.quiet_start_hour_spin.Bind(wx.EVT_SPINCTRL, self._on_quiet_hours_changed)
+        self.quiet_start_minute_spin.Bind(wx.EVT_SPINCTRL, self._on_quiet_hours_changed)
+        self.quiet_end_hour_spin.Bind(wx.EVT_SPINCTRL, self._on_quiet_hours_changed)
+        self.quiet_end_minute_spin.Bind(wx.EVT_SPINCTRL, self._on_quiet_hours_changed)
+        self.alarm_enabled_checkbox.Bind(wx.EVT_CHECKBOX, self._on_alarm_changed)
+        self.alarm_hour_spin.Bind(wx.EVT_SPINCTRL, self._on_alarm_changed)
+        self.alarm_minute_spin.Bind(wx.EVT_SPINCTRL, self._on_alarm_changed)
+        self.alarm_sound_checkbox.Bind(wx.EVT_CHECKBOX, self._on_alarm_changed)
+        self.alarm_text_ctrl.Bind(wx.EVT_TEXT, self._on_alarm_changed)
         self.test_button.Bind(wx.EVT_BUTTON, self._on_test_chime)
         self.announce_button.Bind(wx.EVT_BUTTON, self._on_announce_time)
+        self.test_alarm_button.Bind(wx.EVT_BUTTON, self._on_test_alarm)
         self.settings_button.Bind(wx.EVT_BUTTON, self._on_settings)
 
     def _setup_keyboard_shortcuts(self) -> None:
@@ -237,7 +364,26 @@ class MainWindow(wx.Frame):
 
     def _get_current_time(self) -> str:
         """Get the current time as a formatted string."""
-        return datetime.now().strftime(TIME_FORMAT_12H)
+        fmt = TIME_FORMAT_24H if self.app.config.get("time_format") == "24h" else TIME_FORMAT_12H
+        return datetime.now().strftime(fmt)
+
+    def _get_audio_backend_text(self) -> str:
+        """Return current audio backend status for the UI."""
+        if not self.app.audio_player:
+            return "unavailable"
+        return getattr(self.app.audio_player, "backend_name", "available")
+
+    def _parse_hhmm(self, value: str, default: str) -> tuple[int, int]:
+        """Parse HH:MM text for spin controls."""
+        try:
+            hour_text, minute_text = (value or default).split(":")
+            hour = max(0, min(23, int(hour_text)))
+            minute = max(0, min(59, int(minute_text)))
+        except (TypeError, ValueError):
+            hour_text, minute_text = default.split(":")
+            hour = int(hour_text)
+            minute = int(minute_text)
+        return hour, minute
 
     def _get_clock_display_name(self, pack_id: str) -> str:
         """Get the display name for a clock pack ID."""
@@ -261,10 +407,14 @@ class MainWindow(wx.Frame):
         """Handle clock timer tick."""
         self.clock_display.SetValue(self._get_current_time())
 
+        if self.app.check_and_trigger_alarm():
+            self._set_status("Alarm triggered")
+            return
+
         # Check for chime intervals and play sounds
         chime_played = self.app.check_and_play_chime()
         if chime_played:
-            self._set_status(f"Playing {chime_played.replace('_', ' ')} chime")
+            self._set_status(f"Playing {chime_played.replace('_', ' ')}")
 
     def _on_clock_changed(self, event: wx.CommandEvent) -> None:
         """Handle clock pack selection change."""
@@ -309,6 +459,74 @@ class MainWindow(wx.Frame):
         self.app.save_config()
         logger.info(f"Chime intervals updated: {interval_text}")
 
+    def _on_chime_options_changed(self, event: wx.CommandEvent) -> None:
+        """Handle chime style, hour count, and minute tick changes."""
+        self.app.chime_style = (
+            "grandfather" if self.chime_style_choice.GetSelection() == 1 else "classic"
+        )
+        self.app.hour_count_chimes = self.hour_count_checkbox.GetValue()
+        self.app.minute_tick = self.minute_tick_checkbox.GetValue()
+        if self.app.clock_service:
+            self.app.clock_service.reset_chime_tracking()
+
+        style_text = "grandfather counted chimes" if self.app.chime_style == "grandfather" else "classic single chime"
+        tick_text = "minute tick on" if self.app.minute_tick else "minute tick off"
+        hour_count_text = "hour count on" if self.app.hour_count_chimes else "hour count off"
+        self._set_status(f"Chime style: {style_text}; {hour_count_text}; {tick_text}")
+        self.app.save_config()
+        logger.info("Chime options updated: %s, %s, %s", style_text, hour_count_text, tick_text)
+
+    def _on_quiet_hours_changed(self, event: wx.CommandEvent) -> None:
+        """Handle quiet hours changes."""
+        if self.quiet_enabled_checkbox.GetValue() and self.app.clock_service:
+            from datetime import time
+
+            start = time(
+                self.quiet_start_hour_spin.GetValue(),
+                self.quiet_start_minute_spin.GetValue(),
+            )
+            end = time(
+                self.quiet_end_hour_spin.GetValue(),
+                self.quiet_end_minute_spin.GetValue(),
+            )
+            self.app.clock_service.set_quiet_hours(start, end)
+            self.app.quiet_hours_enabled = True
+            self.app.quiet_start = f"{start.hour:02d}:{start.minute:02d}"
+            self.app.quiet_end = f"{end.hour:02d}:{end.minute:02d}"
+        elif self.app.clock_service:
+            self.app.clock_service.quiet_hours_enabled = False
+            self.app.quiet_hours_enabled = False
+            self.app.quiet_start = (
+                f"{self.quiet_start_hour_spin.GetValue():02d}:"
+                f"{self.quiet_start_minute_spin.GetValue():02d}"
+            )
+            self.app.quiet_end = (
+                f"{self.quiet_end_hour_spin.GetValue():02d}:"
+                f"{self.quiet_end_minute_spin.GetValue():02d}"
+            )
+        self.app.save_config()
+        state = "enabled" if self.app.quiet_hours_enabled else "disabled"
+        self._set_status(
+            f"Quiet hours {state}: {self.app.quiet_start} to {self.app.quiet_end}"
+        )
+
+    def _on_alarm_changed(self, event: wx.CommandEvent) -> None:
+        """Handle alarm option changes."""
+        self._sync_alarm_from_controls(save=True)
+        state = "enabled" if self.app.alarm_enabled else "disabled"
+        self._set_status(f"Alarm {state} for {self.app.alarm_time}")
+
+    def _sync_alarm_from_controls(self, *, save: bool) -> None:
+        """Copy alarm UI state into the app and clock service."""
+        self.app.alarm_enabled = self.alarm_enabled_checkbox.GetValue()
+        self.app.alarm_time = (
+            f"{self.alarm_hour_spin.GetValue():02d}:{self.alarm_minute_spin.GetValue():02d}"
+        )
+        self.app.alarm_sound_enabled = self.alarm_sound_checkbox.GetValue()
+        self.app.alarm_spoken_text = self.alarm_text_ctrl.GetValue().strip() or "Time to get up"
+        if save:
+            self.app.save_config()
+
     def _on_test_chime(self, event: wx.CommandEvent) -> None:
         """Handle test chime button/menu."""
         self._set_status("Playing test chime...")
@@ -321,13 +539,27 @@ class MainWindow(wx.Frame):
         """Handle announce time button/menu."""
         current_time = self._get_current_time()
         
-        if self.app.announce_time():
+        if self.app.announce_time(style=self.app.config.get("announcement_style", "simple")):
             self._set_status(f"Announced: {current_time}")
         else:
             # TTS not available, just show status
             self._set_status(f"The time is {current_time}")
         
         logger.info(f"Time announced: {current_time}")
+
+    def _on_test_alarm(self, event: wx.CommandEvent) -> None:
+        """Play the configured alarm sound/message immediately."""
+        self._sync_alarm_from_controls(save=True)
+        did_anything = False
+        if self.app.alarm_sound_enabled:
+            did_anything = self.app.play_chime("alarm") or did_anything
+        if self.app.alarm_spoken_text and self.app.tts_engine:
+            self.app.tts_engine.speak(self.app.alarm_spoken_text)
+            did_anything = True
+        if did_anything:
+            self._set_status("Test alarm played")
+        else:
+            self._set_status("Could not test alarm - audio and speech unavailable")
 
     def _on_settings(self, event: wx.CommandEvent) -> None:
         """Handle settings button/menu."""

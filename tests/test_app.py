@@ -2,7 +2,9 @@
 
 import json
 import tempfile
+from datetime import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 class TestConfigLoading:
@@ -153,3 +155,59 @@ class TestAppIntegration:
         """Audio player should be importable."""
         from accessiclock.audio.player import AudioPlayer
         assert AudioPlayer is not None
+
+
+class TestAppChimePlayback:
+    """Test app chime and alarm orchestration without starting wx."""
+
+    def test_play_chime_sequence_uses_audio_player_sequence_for_multiple_sounds(self, temp_dir):
+        """Multiple scheduled sounds should be delegated as one ordered sequence."""
+        from accessiclock.app import AccessiClockApp
+        from accessiclock.services.clock_pack_loader import ClockPackLoader
+
+        clock_dir = temp_dir / "clocks" / "test"
+        clock_dir.mkdir(parents=True)
+        for name in ["hour.wav", "tick.wav"]:
+            (clock_dir / name).touch()
+        (clock_dir / "clock.json").write_text(
+            json.dumps(
+                {
+                    "name": "Test",
+                    "version": "1.0",
+                    "sounds": {"hour": "hour.wav", "tick": "tick.wav"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        app = AccessiClockApp.__new__(AccessiClockApp)
+        app.audio_player = MagicMock()
+        app.audio_player.play_sound_sequence.return_value = True
+        app.clock_pack_loader = ClockPackLoader(temp_dir / "clocks")
+        app.clock_pack_loader.discover_packs()
+        app.selected_clock = "test"
+
+        assert app.play_chime_sequence(["tick", "hour", "hour"]) is True
+        app.audio_player.play_sound_sequence.assert_called_once()
+        played = app.audio_player.play_sound_sequence.call_args.args[0]
+        assert played == [
+            str(clock_dir / "tick.wav"),
+            str(clock_dir / "hour.wav"),
+            str(clock_dir / "hour.wav"),
+        ]
+
+    def test_check_and_trigger_alarm_speaks_configured_text(self):
+        """A due alarm should play sound when available and speak configured text."""
+        from accessiclock.app import AccessiClockApp
+        from accessiclock.services.clock_service import ClockService
+
+        app = AccessiClockApp.__new__(AccessiClockApp)
+        app.clock_service = ClockService()
+        app.clock_service.set_alarm(time(7, 30), spoken_text="Wake up", sound_enabled=True)
+        app.play_chime = MagicMock(return_value=True)
+        app.tts_engine = MagicMock()
+
+        assert app.check_and_trigger_alarm(time(7, 30, 0)) is True
+
+        app.play_chime.assert_called_once_with("alarm")
+        app.tts_engine.speak.assert_called_once_with("Wake up")

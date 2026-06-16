@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from datetime import date, time
-from typing import Literal
+from typing import Any, Literal
 
 from ..constants import TTS_RATE_DEFAULT, TTS_RATE_MAX, TTS_RATE_MIN
 
@@ -48,7 +48,7 @@ class TTSEngine:
             force_dummy: Force use of dummy engine (for testing).
         """
         self._rate = self._clamp_rate(rate)
-        self._engine = None
+        self._engine: Any | None = None
         self._voice_id: str | None = None
         
         if force_dummy or not _PYTTSX3_AVAILABLE:
@@ -89,6 +89,9 @@ class TTSEngine:
         """
         if self.engine_type == "dummy":
             logger.debug(f"Dummy TTS: {text}")
+            return
+        if self._engine is None:
+            logger.debug("TTS engine unavailable: %s", text)
             return
 
         try:

@@ -337,6 +337,68 @@ class TestPlaySound:
             Path(temp_path).unlink(missing_ok=True)
 
 
+class TestPlaySoundSequence:
+    """Test ordered sound sequence playback."""
+
+    def test_play_sound_sequence_returns_false_for_empty_sequence(self):
+        """Empty sound sequences should be ignored."""
+        with patch("accessiclock.audio.player._use_sound_lib", False):
+            from accessiclock.audio.player import AudioPlayer
+
+            player = AudioPlayer()
+            assert player.play_sound_sequence([]) is False
+
+    def test_play_sound_sequence_validates_all_files(self):
+        """Missing files in a sequence should fail before a worker is started."""
+        with patch("accessiclock.audio.player._use_sound_lib", False):
+            from accessiclock.audio.player import AudioPlayer
+
+            player = AudioPlayer()
+            with pytest.raises(FileNotFoundError):
+                player.play_sound_sequence(["/nonexistent/chime.wav"])
+
+    def test_sequence_worker_uses_sound_lib_blocking(self):
+        """Sequence worker should play each file with sound_lib in blocking mode."""
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._volume = 50
+            player._current_stream = None
+            player._play_with_sound_lib = MagicMock()
+
+            paths = [Path("one.wav"), Path("two.wav")]
+            player._play_sequence_worker(paths)
+
+            assert player._play_with_sound_lib.call_count == 2
+            assert player._play_with_sound_lib.call_args_list[0].kwargs["block"] is True
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_sequence_worker_uses_fallback_blocking(self):
+        """Sequence worker should use the fallback synchronously when sound_lib is unavailable."""
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._volume = 50
+            player._current_stream = None
+            player._play_with_fallback_blocking = MagicMock()
+
+            paths = [Path("one.wav"), Path("two.wav")]
+            player._play_sequence_worker(paths)
+
+            assert player._play_with_fallback_blocking.call_count == 2
+        finally:
+            player_module._use_sound_lib = original_use
+
+
 class TestIsPlaying:
     """Test is_playing method."""
 

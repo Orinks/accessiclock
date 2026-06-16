@@ -49,22 +49,17 @@ An accessible talking clock application designed for visually impaired users, bu
 git clone https://github.com/orinks/AccessiClock.git
 cd AccessiClock
 
-# Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-# or: source .venv/bin/activate  # Linux/macOS
-
-# Install dependencies
-pip install -e .
+# Create the local development environment
+uv sync --group dev
 
 # Run the application
-python -m accessiclock
+uv run python -m accessiclock
 ```
 
 ### Development Installation
 
 ```bash
-pip install -e ".[dev]"
+uv sync --group dev
 ```
 
 ## Usage
@@ -137,10 +132,14 @@ Settings are stored in:
 
 ```bash
 # Run all tests
-PYTHONPATH=src pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run with coverage
-PYTHONPATH=src pytest tests/ --cov=accessiclock
+uv run pytest tests/ --cov=accessiclock
+
+# Run lint and type checks
+uv run ruff check src tests
+uv run mypy src
 ```
 
 ### Project Structure

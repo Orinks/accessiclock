@@ -228,6 +228,19 @@ class TestClockPackManifest:
 class TestClockPackValidation:
     """Test clock pack validation."""
 
+    def test_bundled_clock_packs_reference_existing_sounds(self):
+        """Bundled clock pack manifests should not point at missing audio files."""
+        from accessiclock.paths import Paths
+        from accessiclock.services.clock_pack_loader import ClockPackLoader
+
+        loader = ClockPackLoader(Paths().clocks_dir)
+        packs = loader.discover_packs()
+
+        assert packs
+        for pack_info in packs.values():
+            is_valid, errors = loader.validate_pack(pack_info)
+            assert is_valid, f"{pack_info.pack_id} has invalid sound files: {errors}"
+
     def test_validate_sounds_exist(self):
         """Should validate that referenced sound files exist."""
         from accessiclock.services.clock_pack_loader import ClockPackLoader

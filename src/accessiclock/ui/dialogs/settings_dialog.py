@@ -8,9 +8,11 @@ voice settings, quiet hours, and display options.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import wx
+
+from ...audio.tts_engine import TimeStyle
 
 if TYPE_CHECKING:
     from ...app import AccessiClockApp
@@ -157,12 +159,11 @@ class SettingsDialog(wx.Dialog):
         # Get available voices
         voices = []
         if self.app.tts_engine:
-            voices = self.app.tts_engine.list_voices()
+            voices = [voice["name"] for voice in self.app.tts_engine.list_voices()]
         if not voices:
             voices = ["(Default system voice)"]
         
         self.voice_choice = wx.Choice(panel, choices=voices)
-        self.voice_choice.SetName("Voice")
         self.voice_choice.SetSelection(0)
         sizer.Add(self.voice_choice, 0, wx.EXPAND | wx.ALL, 10)
         
@@ -175,7 +176,6 @@ class SettingsDialog(wx.Dialog):
             panel, value=150, minValue=50, maxValue=300,
             style=wx.SL_HORIZONTAL | wx.SL_VALUE_LABEL
         )
-        self.rate_slider.SetName("Speech rate")
         rate_sizer.Add(self.rate_slider, 1, wx.EXPAND)
         sizer.Add(rate_sizer, 0, wx.EXPAND | wx.ALL, 10)
         
@@ -222,44 +222,40 @@ class SettingsDialog(wx.Dialog):
         
         # Start time
         start_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        start_label = wx.StaticText(panel, label="Start:")
+        start_label = wx.StaticText(panel, label="Start hour:")
         start_sizer.Add(start_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         
         self.quiet_start_hour = wx.SpinCtrl(
             panel, min=0, max=23, initial=22, size=(60, -1)
         )
-        self.quiet_start_hour.SetName("Quiet hours start hour")
         start_sizer.Add(self.quiet_start_hour, 0, wx.RIGHT, 5)
         
-        start_colon = wx.StaticText(panel, label=":")
-        start_sizer.Add(start_colon, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        start_minute_label = wx.StaticText(panel, label="Start minute:")
+        start_sizer.Add(start_minute_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         
         self.quiet_start_min = wx.SpinCtrl(
             panel, min=0, max=59, initial=0, size=(60, -1)
         )
-        self.quiet_start_min.SetName("Quiet hours start minute")
         start_sizer.Add(self.quiet_start_min, 0)
         
         time_sizer.Add(start_sizer, 0, wx.ALL, 5)
         
         # End time
         end_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        end_label = wx.StaticText(panel, label="End:")
+        end_label = wx.StaticText(panel, label="End hour:")
         end_sizer.Add(end_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         
         self.quiet_end_hour = wx.SpinCtrl(
             panel, min=0, max=23, initial=7, size=(60, -1)
         )
-        self.quiet_end_hour.SetName("Quiet hours end hour")
         end_sizer.Add(self.quiet_end_hour, 0, wx.RIGHT, 5)
         
-        end_colon = wx.StaticText(panel, label=":")
-        end_sizer.Add(end_colon, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        end_minute_label = wx.StaticText(panel, label="End minute:")
+        end_sizer.Add(end_minute_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         
         self.quiet_end_min = wx.SpinCtrl(
             panel, min=0, max=59, initial=0, size=(60, -1)
         )
-        self.quiet_end_min.SetName("Quiet hours end minute")
         end_sizer.Add(self.quiet_end_min, 0)
         
         time_sizer.Add(end_sizer, 0, wx.ALL, 5)
@@ -423,7 +419,7 @@ class SettingsDialog(wx.Dialog):
         
         # Update app state
         if self.app.tts_engine:
-            self.app.tts_engine.set_rate(config["speech_rate"])
+            self.app.tts_engine.rate = config["speech_rate"]
         
         if self.app.clock_service:
             if config["quiet_hours_enabled"]:
@@ -434,8 +430,12 @@ class SettingsDialog(wx.Dialog):
                     time(start_h, start_m),
                     time(end_h, end_m)
                 )
+                self.app.quiet_hours_enabled = True
             else:
                 self.app.clock_service.quiet_hours_enabled = False
+                self.app.quiet_hours_enabled = False
+            self.app.quiet_start = config["quiet_start"]
+            self.app.quiet_end = config["quiet_end"]
         
         # Save to file
         self.app.save_config()
@@ -477,7 +477,7 @@ class SettingsDialog(wx.Dialog):
         if self.app.tts_engine:
             # Temporarily apply rate
             rate = self.rate_slider.GetValue()
-            self.app.tts_engine.set_rate(rate)
+            self.app.tts_engine.rate = rate
             
             # Get style
             if self.style_simple.GetValue():
@@ -488,7 +488,9 @@ class SettingsDialog(wx.Dialog):
                 style = "precise"
             
             from datetime import datetime
-            self.app.tts_engine.speak_time(datetime.now().time(), style=style)
+            self.app.tts_engine.speak_time(
+                datetime.now().time(), style=cast(TimeStyle, style)
+            )
         else:
             wx.MessageBox(
                 "TTS engine is not available.",
