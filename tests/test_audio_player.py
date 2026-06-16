@@ -128,6 +128,108 @@ class TestVolumeControl:
         assert player._convert_volume_to_decimal(50) == 0.5
         assert player._convert_volume_to_decimal(100) == 1.0
 
+
+class TestAudioDeviceSelection:
+    """Test sound_lib output device selection helpers."""
+
+    def test_list_output_devices_returns_default_for_fallback_backend(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = ""
+
+            assert player.list_output_devices() == ["Default system device"]
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_list_output_devices_includes_sound_lib_devices(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = ""
+
+            mock_output_module = MagicMock()
+            mock_output_module.Output.get_device_names.return_value = ["Default", "Speakers"]
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                assert player.list_output_devices() == [
+                    "Default system device",
+                    "Speakers",
+                ]
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_set_output_device_reinitializes_sound_lib_output(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        original_init = player_module._bass_initialized
+        try:
+            player_module._use_sound_lib = True
+            player_module._bass_initialized = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            old_output = MagicMock()
+            player._audio_output = old_output
+            player._audio_device_name = ""
+
+            new_output = MagicMock()
+            new_output.find_user_provided_device.return_value = 2
+            mock_output_module = MagicMock()
+            mock_output_module.Output.return_value = new_output
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                player.set_output_device("Speakers")
+
+            old_output.free.assert_called_once()
+            mock_output_module.Output.assert_called_once()
+            new_output.find_user_provided_device.assert_called_once_with("Speakers")
+            new_output.set_device.assert_called_once_with(2)
+            assert player.get_output_device_name() == "Speakers"
+        finally:
+            player_module._use_sound_lib = original_use
+            player_module._bass_initialized = original_init
+
+    def test_set_output_device_default_uses_default_sound_lib_output(self):
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        original_init = player_module._bass_initialized
+        try:
+            player_module._use_sound_lib = True
+            player_module._bass_initialized = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._current_stream = None
+            player._volume = 50
+            player._audio_output = None
+            player._audio_device_name = "Speakers"
+
+            mock_output_module = MagicMock()
+            with patch.dict("sys.modules", {"sound_lib.output": mock_output_module}):
+                player.set_output_device("")
+
+            mock_output_module.Output.assert_called_once_with()
+            assert player.get_output_device_name() == ""
+            assert player_module._bass_initialized is True
+        finally:
+            player_module._use_sound_lib = original_use
+            player_module._bass_initialized = original_init
+
     def test_set_volume_updates_playing_stream(self):
         """set_volume should update volume on currently playing stream."""
         import accessiclock.audio.player as player_module
@@ -335,6 +437,68 @@ class TestPlaySound:
                 player._play_with_sound_lib(Path(temp_path))
         finally:
             Path(temp_path).unlink(missing_ok=True)
+
+
+class TestPlaySoundSequence:
+    """Test ordered sound sequence playback."""
+
+    def test_play_sound_sequence_returns_false_for_empty_sequence(self):
+        """Empty sound sequences should be ignored."""
+        with patch("accessiclock.audio.player._use_sound_lib", False):
+            from accessiclock.audio.player import AudioPlayer
+
+            player = AudioPlayer()
+            assert player.play_sound_sequence([]) is False
+
+    def test_play_sound_sequence_validates_all_files(self):
+        """Missing files in a sequence should fail before a worker is started."""
+        with patch("accessiclock.audio.player._use_sound_lib", False):
+            from accessiclock.audio.player import AudioPlayer
+
+            player = AudioPlayer()
+            with pytest.raises(FileNotFoundError):
+                player.play_sound_sequence(["/nonexistent/chime.wav"])
+
+    def test_sequence_worker_uses_sound_lib_blocking(self):
+        """Sequence worker should play each file with sound_lib in blocking mode."""
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = True
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._volume = 50
+            player._current_stream = None
+            player._play_with_sound_lib = MagicMock()
+
+            paths = [Path("one.wav"), Path("two.wav")]
+            player._play_sequence_worker(paths)
+
+            assert player._play_with_sound_lib.call_count == 2
+            assert player._play_with_sound_lib.call_args_list[0].kwargs["block"] is True
+        finally:
+            player_module._use_sound_lib = original_use
+
+    def test_sequence_worker_uses_fallback_blocking(self):
+        """Sequence worker should use the fallback synchronously when sound_lib is unavailable."""
+        import accessiclock.audio.player as player_module
+        from accessiclock.audio.player import AudioPlayer
+
+        original_use = player_module._use_sound_lib
+        try:
+            player_module._use_sound_lib = False
+            player = AudioPlayer.__new__(AudioPlayer)
+            player._volume = 50
+            player._current_stream = None
+            player._play_with_fallback_blocking = MagicMock()
+
+            paths = [Path("one.wav"), Path("two.wav")]
+            player._play_sequence_worker(paths)
+
+            assert player._play_with_fallback_blocking.call_count == 2
+        finally:
+            player_module._use_sound_lib = original_use
 
 
 class TestIsPlaying:

@@ -8,7 +8,10 @@ Falls back to playsound3 on other platforms.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,11 @@ except Exception as e:
     logger.debug(f"sound_lib initialization failed: {e}")
 
 
+def get_audio_backend_name() -> str:
+    """Return a user-facing name for the active audio backend."""
+    return "sound_lib" if _use_sound_lib else "playsound3 fallback"
+
+
 class AudioPlayer:
     """
     Audio player for playing sound files with volume control.
@@ -36,7 +44,7 @@ class AudioPlayer:
     without blocking the UI thread. Falls back to playsound3 on non-Windows.
     """
 
-    def __init__(self, volume_percent: int = 50):
+    def __init__(self, volume_percent: int = 50, audio_device_name: str = ""):
         """
         Initialize AudioPlayer.
 
@@ -45,22 +53,83 @@ class AudioPlayer:
         """
         global _bass_initialized
 
-        self._current_stream = None
+        self._current_stream: Any | None = None
+        self._audio_output: Any | None = None
+        self._audio_device_name = audio_device_name.strip()
         self._volume = self._clamp_volume(volume_percent)
 
         # Initialize BASS audio library if using sound_lib
-        if _use_sound_lib and not _bass_initialized:
-            try:
-                from sound_lib import output
-
-                output.Output()  # Initialize default output device
-                _bass_initialized = True
-                logger.info("BASS audio system initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize BASS audio system: {e}")
-                raise
+        if _use_sound_lib:
+            self._initialize_sound_lib_output(self._audio_device_name)
 
         logger.info(f"AudioPlayer initialized with volume {self._volume}%")
+
+    @property
+    def backend_name(self) -> str:
+        """Return the active audio backend name."""
+        return get_audio_backend_name()
+
+    def _initialize_sound_lib_output(self, device_name: str = "") -> None:
+        """Initialize sound_lib/BASS for the default or named output device."""
+        global _bass_initialized
+
+        try:
+            from sound_lib import output
+
+            self._audio_output = output.Output()
+            if device_name:
+                device_index = self._audio_output.find_user_provided_device(device_name)
+                self._audio_output.set_device(device_index)
+            self._audio_device_name = device_name
+            _bass_initialized = True
+            logger.info(
+                "BASS audio system initialized using %s",
+                device_name or "default system device",
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize BASS audio system: {e}")
+            raise
+
+    def list_output_devices(self) -> list[str]:
+        """Return available output devices for the current backend."""
+        devices = ["Default system device"]
+        if not _use_sound_lib:
+            return devices
+
+        try:
+            from sound_lib import output
+
+            for name in output.Output.get_device_names():
+                clean_name = str(name).strip()
+                if clean_name and clean_name.lower() != "default" and clean_name not in devices:
+                    devices.append(clean_name)
+        except Exception:
+            logger.warning("Unable to enumerate sound_lib output devices", exc_info=True)
+        return devices
+
+    def set_output_device(self, device_name: str) -> None:
+        """Switch to the default or named sound_lib output device."""
+        global _bass_initialized
+
+        clean_name = device_name.strip()
+        if clean_name == "Default system device":
+            clean_name = ""
+        if not _use_sound_lib:
+            self._audio_device_name = clean_name
+            return
+        if self._current_stream:
+            self.stop()
+        if self._audio_output:
+            try:
+                self._audio_output.free()
+            except Exception:
+                logger.debug("Ignoring error while freeing previous output", exc_info=True)
+        _bass_initialized = False
+        self._initialize_sound_lib_output(clean_name)
+
+    def get_output_device_name(self) -> str:
+        """Return the selected output device name, or blank for the default."""
+        return self._audio_device_name
 
     def _clamp_volume(self, volume_percent: int) -> int:
         """Clamp volume to valid range (0-100)."""
@@ -105,7 +174,38 @@ class AudioPlayer:
         else:
             self._play_with_fallback(path)
 
-    def _play_with_sound_lib(self, path: Path) -> None:
+    def play_sound_sequence(self, file_paths: list[str]) -> bool:
+        """
+        Play multiple audio files in order without blocking the UI thread.
+
+        Returns False when the sequence is empty. Missing files still raise
+        FileNotFoundError so callers can surface the pack problem.
+        """
+        paths = [Path(file_path) for file_path in file_paths]
+        if not paths:
+            return False
+        for path in paths:
+            if not path.exists():
+                logger.error("Audio file not found: %s", path)
+                raise FileNotFoundError(f"Audio file not found: {path}")
+
+        thread = threading.Thread(target=self._play_sequence_worker, args=(paths,), daemon=True)
+        thread.start()
+        return True
+
+    def _play_sequence_worker(self, paths: list[Path]) -> None:
+        """Worker thread used for ordered chime sequences."""
+        for path in paths:
+            try:
+                if _use_sound_lib:
+                    self._play_with_sound_lib(path, block=True)
+                else:
+                    self._play_with_fallback_blocking(path)
+            except Exception:
+                logger.warning("Stopping sound sequence after playback failure", exc_info=True)
+                return
+
+    def _play_with_sound_lib(self, path: Path, *, block: bool = False) -> None:
         """Play audio using sound_lib (Windows)."""
         try:
             # Stop any currently playing sound
@@ -113,9 +213,15 @@ class AudioPlayer:
                 self.stop()
 
             logger.info(f"Playing audio file: {path}")
-            self._current_stream = stream.FileStream(file=str(path))
-            self._current_stream.volume = self._convert_volume_to_decimal(self._volume)
-            self._current_stream.play()
+            current_stream = stream.FileStream(file=str(path))
+            self._current_stream = current_stream
+            current_stream.volume = self._convert_volume_to_decimal(self._volume)
+            current_stream.play()
+            if block:
+                while current_stream.is_playing:
+                    time.sleep(0.05)
+                current_stream.free()
+                self._current_stream = None
 
         except Exception as e:
             logger.error(f"Error playing audio file {path}: {e}")
@@ -140,6 +246,20 @@ class AudioPlayer:
             logger.error(f"Error playing audio file {path}: {e}")
             raise
 
+    def _play_with_fallback_blocking(self, path: Path) -> None:
+        """Play audio synchronously with the fallback backend."""
+        try:
+            from playsound3 import playsound
+
+            logger.info("Playing audio file in sequence (fallback): %s", path)
+            playsound(str(path))
+        except ImportError:
+            logger.error("playsound3 not installed, cannot play audio")
+            raise
+        except Exception as e:
+            logger.error(f"Error playing audio file {path}: {e}")
+            raise
+
     def stop(self) -> None:
         """Stop currently playing audio."""
         if _use_sound_lib and self._current_stream:
@@ -156,7 +276,7 @@ class AudioPlayer:
         """Check if audio is currently playing."""
         if _use_sound_lib and self._current_stream:
             try:
-                return self._current_stream.is_playing
+                return bool(self._current_stream.is_playing)
             except Exception:
                 return False
         return False
@@ -177,5 +297,11 @@ class AudioPlayer:
 
         # Reset BASS initialization flag
         if _use_sound_lib and _bass_initialized:
+            audio_output = getattr(self, "_audio_output", None)
+            if audio_output:
+                try:
+                    audio_output.free()
+                except Exception:
+                    logger.debug("Ignoring error while freeing output", exc_info=True)
             _bass_initialized = False
             logger.info("BASS audio system cleanup complete")

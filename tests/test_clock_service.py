@@ -117,6 +117,129 @@ class TestChimeScheduling:
         test_time = time(15, 30, 0)
         assert service.should_chime_now(test_time) == "quarter_hour"
 
+    def test_classic_chime_sequence_keeps_single_hour_chime(self):
+        """Classic style should preserve the existing one-sound hourly behavior."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.chime_style = "classic"
+        service.chime_hourly = True
+
+        assert service.get_chime_sequence(time(15, 0, 0)) == ["hour"]
+
+    def test_grandfather_hour_count_repeats_hour_sound(self):
+        """Grandfather style can count the current hour with repeated hour sounds."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.chime_style = "grandfather"
+        service.hour_count_chimes = True
+        service.chime_hourly = True
+
+        assert service.get_chime_sequence(time(15, 0, 0)) == ["hour", "hour", "hour"]
+
+    def test_grandfather_quarter_chimes_count_quarter_position(self):
+        """Grandfather quarter-hour style should play one, two, or three quarter sounds."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.chime_style = "grandfather"
+        service.chime_quarter_hour = True
+        service.chime_half_hour = False
+
+        assert service.get_chime_sequence(time(15, 15, 0)) == ["quarter_hour"]
+        assert service.get_chime_sequence(time(15, 30, 0)) == ["quarter_hour", "quarter_hour"]
+        assert service.get_chime_sequence(time(15, 45, 0)) == [
+            "quarter_hour",
+            "quarter_hour",
+            "quarter_hour",
+        ]
+
+    def test_minute_tick_can_precede_chime_sequence(self):
+        """Optional minute tick should play before interval chimes when both are enabled."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.minute_tick = True
+        service.chime_hourly = True
+
+        assert service.get_chime_sequence(time(15, 0, 0)) == ["tick", "hour"]
+
+    def test_minute_tick_plays_on_non_chime_minutes(self):
+        """Optional minute tick should be able to sound on ordinary minutes."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.minute_tick = True
+
+        assert service.get_chime_sequence(time(15, 23, 0)) == ["tick"]
+
+    def test_quiet_hours_silence_tick_and_chime_sequence(self):
+        """Quiet hours should silence all scheduled tick and chime sounds."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.minute_tick = True
+        service.chime_hourly = True
+        service.set_quiet_hours(time(22, 0), time(7, 0))
+
+        assert service.get_chime_sequence(time(23, 0, 0)) == []
+
+    def test_chime_sequence_not_repeated_same_minute_after_marked(self):
+        """Generated chime sequences should respect the existing duplicate guard."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.minute_tick = True
+        service.chime_hourly = True
+
+        test_time = time(15, 0, 0)
+        assert service.get_chime_sequence(test_time) == ["tick", "hour"]
+        service.mark_chimed(test_time)
+        assert service.get_chime_sequence(time(15, 0, 30)) == []
+
+
+class TestAlarmScheduling:
+    """Test alarm scheduling, sound, and spoken text behavior."""
+
+    def test_alarm_due_uses_sound_and_spoken_text(self):
+        """A due alarm should expose both its sound and spoken message."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.set_alarm(time(7, 30), spoken_text="Time to get up", sound_enabled=True)
+
+        alarm = service.get_due_alarm(time(7, 30, 0))
+
+        assert alarm is not None
+        assert alarm.sound_name == "alarm"
+        assert alarm.spoken_text == "Time to get up"
+
+    def test_alarm_ignores_quiet_hours(self):
+        """Quiet hours should not suppress explicit alarms."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.set_quiet_hours(time(22, 0), time(8, 0))
+        service.set_alarm(time(7, 30), spoken_text="Wake up", sound_enabled=False)
+
+        alarm = service.get_due_alarm(time(7, 30, 0))
+
+        assert alarm is not None
+        assert alarm.sound_name is None
+        assert alarm.spoken_text == "Wake up"
+
+    def test_alarm_not_repeated_same_minute_after_marked(self):
+        """A due alarm should not retrigger after it is marked handled."""
+        from accessiclock.services.clock_service import ClockService
+
+        service = ClockService()
+        service.set_alarm(time(7, 30), spoken_text="Wake up")
+
+        assert service.get_due_alarm(time(7, 30, 0)) is not None
+        service.mark_alarmed(time(7, 30, 0))
+        assert service.get_due_alarm(time(7, 30, 30)) is None
+
 
 class TestChimeTracking:
     """Test that chimes don't repeat within the same minute."""

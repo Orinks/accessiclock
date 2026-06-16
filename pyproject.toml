@@ -46,6 +46,23 @@ ai = [
     "elevenlabs>=0.2.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "pytest-cov",
+    "ruff>=0.9.0",
+    "mypy>=1.0.0",
+]
+build = [
+    "pyinstaller>=6.0.0",
+    "pillow>=10.0.0",
+]
+ai = [
+    "openai>=1.0.0",
+    "elevenlabs>=0.2.0",
+]
+
 [project.scripts]
 accessiclock = "accessiclock.main:main"
 
@@ -67,3 +84,7 @@ ignore = ["E501"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pyttsx3", "sound_lib", "wx", "wx.*"]
+ignore_missing_imports = true

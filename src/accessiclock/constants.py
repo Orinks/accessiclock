@@ -51,4 +51,5 @@ OPTIONAL_CLOCK_SOUNDS = [
     "three_quarter",
     "startup",
     "alarm",
+    "tick",
 ]
